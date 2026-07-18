@@ -1,0 +1,6 @@
+/target/
+/.worktrees/
+/.idea/
+/.fastRequest/
+compile_log.txt
+nbproject/private/
