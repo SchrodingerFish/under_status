@@ -604,6 +604,9 @@ public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerList
                     currentLyrics = lrcLines;
                     updateLyricList(lrcLines);
                     loadCoverImage(finalPicUrl);
+                    if (centerTabbedPane.getTabCount() > 3) {
+                        centerTabbedPane.setSelectedIndex(3);
+                    }
 
                     searchStatusLabel.setText("▶️ 正在播放: " + song.getName());
                     audioPlayer.play(song, finalAudioUrl);

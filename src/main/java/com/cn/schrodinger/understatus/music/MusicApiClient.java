@@ -331,7 +331,13 @@ public class MusicApiClient {
     }
 
     private String extractNestedLyricField(String json) {
-        int lrcIdx = json.indexOf("\"lrc\"");
+        if (json == null || json.isBlank()) {
+            return "";
+        }
+        int lrcIdx = json.indexOf("\"lrc\":");
+        if (lrcIdx == -1) {
+            lrcIdx = json.indexOf("\"lrc\" :");
+        }
         if (lrcIdx == -1) {
             return "";
         }
