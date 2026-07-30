@@ -1,5 +1,7 @@
 package com.cn.schrodinger.understatus.music;
 
+import com.cn.schrodinger.understatus.settings.SettingsRepository;
+
 import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -12,17 +14,20 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import com.cn.schrodinger.understatus.settings.SettingsRepository;
 
 /**
- * Client for fetching music search results, audio stream URLs, album covers, and lyrics
- * from GDStudio Music API or compatible Meting endpoints.
+ * Client for fetching music search results, audio stream URLs, album covers, and lyrics.
+ * Supports GDStudio API with automatic fallback to direct NetEase Cloud Music API to bypass Cloudflare 403 blocks.
  */
 public class MusicApiClient {
 
     private static final Logger LOGGER = Logger.getLogger(MusicApiClient.class.getName());
 
     public static final String DEFAULT_API_URL = "https://music-api.gdstudio.xyz/api.php";
+    private static final String DIRECT_NETEASE_SEARCH_URL = "https://music.163.com/api/search/get/web";
+    private static final String DIRECT_NETEASE_LYRIC_URL = "https://music.163.com/api/song/lyric";
+    private static final String DIRECT_NETEASE_PLAY_URL = "https://music.163.com/song/media/outer/url?id=";
+
     private static final String USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
             + "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
@@ -47,13 +52,90 @@ public class MusicApiClient {
             return new ArrayList<>();
         }
         String sourceParam = (source == null || source.isBlank()) ? "netease" : source.toLowerCase();
-        String encodedKw = URLEncoder.encode(keyword.trim(), StandardCharsets.UTF_8);
 
-        String targetUrl = getApiUrl() + "?types=search&name=" + encodedKw + "&source=" + sourceParam
-                + "&count=" + Math.max(1, Math.min(50, count));
+        // Strategy 1: Try configured / GDStudio API
+        try {
+            String encodedKw = URLEncoder.encode(keyword.trim(), StandardCharsets.UTF_8);
+            String targetUrl = getApiUrl() + "?types=search&name=" + encodedKw + "&source=" + sourceParam
+                    + "&count=" + Math.max(1, Math.min(50, count));
+
+            String json = executeGet(targetUrl);
+            if (json.startsWith("[") && json.contains("id")) {
+                List<MusicSong> list = parseSearchResult(json, sourceParam);
+                if (!list.isEmpty()) {
+                    return list;
+                }
+            }
+        } catch (Exception ex) {
+            LOGGER.log(Level.INFO, "GDStudio API search failed, falling back to direct NetEase API: {0}", ex.getMessage());
+        }
+
+        // Strategy 2: Fallback to direct NetEase Cloud Music API
+        return searchDirectNetEase(keyword, count);
+    }
+
+    /**
+     * Direct NetEase Cloud Music search API fallback.
+     */
+    private List<MusicSong> searchDirectNetEase(String keyword, int count) throws Exception {
+        String encodedKw = URLEncoder.encode(keyword.trim(), StandardCharsets.UTF_8);
+        String targetUrl = DIRECT_NETEASE_SEARCH_URL + "?csrf_token=&hlpretag=&hlposttag=&s="
+                + encodedKw + "&type=1&offset=0&total=true&limit=" + Math.max(1, Math.min(50, count));
 
         String json = executeGet(targetUrl);
-        return parseSearchResult(json, sourceParam);
+        List<MusicSong> list = new ArrayList<>();
+
+        if (json == null || json.isBlank() || !json.contains("\"songs\"")) {
+            return list;
+        }
+
+        int songsIdx = json.indexOf("\"songs\"");
+        if (songsIdx == -1) {
+            return list;
+        }
+        int arrStart = json.indexOf('[', songsIdx);
+        if (arrStart == -1) {
+            return list;
+        }
+
+        int depth = 0;
+        int arrEnd = -1;
+        for (int i = arrStart; i < json.length(); i++) {
+            char c = json.charAt(i);
+            if (c == '[') depth++;
+            else if (c == ']') {
+                depth--;
+                if (depth == 0) {
+                    arrEnd = i;
+                    break;
+                }
+            }
+        }
+
+        if (arrEnd == -1) {
+            return list;
+        }
+
+        String songsArrayJson = json.substring(arrStart, arrEnd + 1);
+        List<String> objects = splitJsonObjectsInArray(songsArrayJson);
+
+        for (String objJson : objects) {
+            try {
+                String id = extractTopLevelJsonField(objJson, "id");
+                String name = extractTopLevelJsonField(objJson, "name");
+                String artist = extractNetEaseArtists(objJson);
+                String album = extractNetEaseAlbum(objJson);
+                String url = DIRECT_NETEASE_PLAY_URL + id + ".mp3";
+
+                if (!id.isBlank() && !name.isBlank()) {
+                    MusicSong song = new MusicSong(id, name, artist, album, "netease", url, "", id);
+                    list.add(song);
+                }
+            } catch (Exception ex) {
+                LOGGER.log(Level.FINE, "Failed to parse NetEase song item", ex);
+            }
+        }
+        return list;
     }
 
     /**
@@ -64,11 +146,25 @@ public class MusicApiClient {
             return "";
         }
         String sourceParam = (source == null || source.isBlank()) ? "netease" : source.toLowerCase();
-        String targetUrl = getApiUrl() + "?types=url&id=" + URLEncoder.encode(songId, StandardCharsets.UTF_8)
-                + "&source=" + sourceParam + "&br=320";
 
-        String json = executeGet(targetUrl);
-        return parseSingleUrlField(json, "url");
+        // Strategy 1: Try GDStudio API
+        try {
+            String targetUrl = getApiUrl() + "?types=url&id=" + URLEncoder.encode(songId, StandardCharsets.UTF_8)
+                    + "&source=" + sourceParam + "&br=320";
+            String json = executeGet(targetUrl);
+            String url = parseSingleUrlField(json, "url");
+            if (url.startsWith("http")) {
+                return url;
+            }
+        } catch (Exception ex) {
+            LOGGER.log(Level.FINE, "GDStudio fetchSongUrl failed, using direct URL fallback", ex);
+        }
+
+        // Strategy 2: Direct NetEase audio stream fallback
+        if ("netease".equals(sourceParam) || isNumeric(songId)) {
+            return DIRECT_NETEASE_PLAY_URL + songId + ".mp3";
+        }
+        return "";
     }
 
     /**
@@ -79,11 +175,16 @@ public class MusicApiClient {
             return "";
         }
         String sourceParam = (source == null || source.isBlank()) ? "netease" : source.toLowerCase();
-        String targetUrl = getApiUrl() + "?types=pic&id=" + URLEncoder.encode(picIdOrSongId, StandardCharsets.UTF_8)
-                + "&source=" + sourceParam;
 
-        String json = executeGet(targetUrl);
-        return parseSingleUrlField(json, "url");
+        try {
+            String targetUrl = getApiUrl() + "?types=pic&id=" + URLEncoder.encode(picIdOrSongId, StandardCharsets.UTF_8)
+                    + "&source=" + sourceParam;
+            String json = executeGet(targetUrl);
+            return parseSingleUrlField(json, "url");
+        } catch (Exception ex) {
+            LOGGER.log(Level.FINE, "GDStudio fetchPicUrl failed", ex);
+            return "";
+        }
     }
 
     /**
@@ -94,37 +195,72 @@ public class MusicApiClient {
             return "";
         }
         String sourceParam = (source == null || source.isBlank()) ? "netease" : source.toLowerCase();
-        String targetUrl = getApiUrl() + "?types=lrc&id=" + URLEncoder.encode(lyricIdOrSongId, StandardCharsets.UTF_8)
-                + "&source=" + sourceParam;
 
-        String response = executeGet(targetUrl);
-        if (response.startsWith("{") && response.contains("\"lyric\"")) {
-            return parseSingleUrlField(response, "lyric");
+        // Strategy 1: Try GDStudio API
+        try {
+            String targetUrl = getApiUrl() + "?types=lrc&id=" + URLEncoder.encode(lyricIdOrSongId, StandardCharsets.UTF_8)
+                    + "&source=" + sourceParam;
+            String response = executeGet(targetUrl);
+            if (response.startsWith("{") && response.contains("\"lyric\"")) {
+                return parseSingleUrlField(response, "lyric");
+            } else if (response.contains("[")) {
+                return response;
+            }
+        } catch (Exception ex) {
+            LOGGER.log(Level.FINE, "GDStudio fetchLyric failed, attempting direct NetEase lyric", ex);
         }
-        return response;
+
+        // Strategy 2: Try Direct NetEase Lyric API
+        try {
+            String targetUrl = DIRECT_NETEASE_LYRIC_URL + "?id=" + URLEncoder.encode(lyricIdOrSongId, StandardCharsets.UTF_8)
+                    + "&lv=1&kv=1&tv=-1";
+            String json = executeGet(targetUrl);
+            if (json.contains("\"lrc\"")) {
+                return extractNestedLyricField(json);
+            }
+        } catch (Exception ex) {
+            LOGGER.log(Level.FINE, "Direct NetEase fetchLyric failed", ex);
+        }
+
+        return "";
     }
 
     private String executeGet(String urlStr) throws Exception {
-        URL url = URI.create(urlStr).toURL();
-        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-        conn.setRequestMethod("GET");
-        conn.setConnectTimeout(TIMEOUT_MS);
-        conn.setReadTimeout(TIMEOUT_MS);
-        conn.setRequestProperty("User-Agent", USER_AGENT);
-        conn.setRequestProperty("Accept", "application/json, text/plain, */*");
-        conn.setRequestProperty("Referer", getApiUrl());
-        conn.setInstanceFollowRedirects(true);
+        String currentUrl = urlStr;
+        for (int attempt = 0; attempt < 5; attempt++) {
+            URL url = URI.create(currentUrl).toURL();
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(TIMEOUT_MS);
+            conn.setReadTimeout(TIMEOUT_MS);
+            conn.setRequestProperty("User-Agent", USER_AGENT);
+            conn.setRequestProperty("Accept", "application/json, text/plain, */*");
+            conn.setRequestProperty("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8");
+            String referer = currentUrl.contains("music.163.com") ? "https://music.163.com/" : getApiUrl();
+            conn.setRequestProperty("Referer", referer);
+            conn.setInstanceFollowRedirects(true);
 
-        int code = conn.getResponseCode();
-        if (code >= 400) {
-            InputStream err = conn.getErrorStream();
-            String msg = err != null ? readStream(err) : "HTTP " + code;
-            throw new Exception("Music API error (" + code + "): " + msg);
-        }
+            int code = conn.getResponseCode();
+            if (code == HttpURLConnection.HTTP_MOVED_PERM || code == HttpURLConnection.HTTP_MOVED_TEMP
+                    || code == 307 || code == 308) {
+                String redirectUrl = conn.getHeaderField("Location");
+                if (redirectUrl != null && !redirectUrl.isBlank()) {
+                    currentUrl = redirectUrl.startsWith("http") ? redirectUrl : getApiUrl() + redirectUrl;
+                    continue;
+                }
+            }
 
-        try (InputStream in = conn.getInputStream()) {
-            return readStream(in);
+            if (code >= 400) {
+                InputStream err = conn.getErrorStream();
+                String msg = err != null ? readStream(err) : "HTTP " + code;
+                throw new Exception("Music API error (" + code + "): " + msg);
+            }
+
+            try (InputStream in = conn.getInputStream()) {
+                return readStream(in);
+            }
         }
+        throw new Exception("Too many redirects for " + urlStr);
     }
 
     private String readStream(InputStream in) throws Exception {
@@ -144,7 +280,6 @@ public class MusicApiClient {
             return list;
         }
 
-        // Lightweight custom JSON array parser for search result objects
         List<String> objects = splitJsonObjectsInArray(json);
         for (String objJson : objects) {
             try {
@@ -152,14 +287,6 @@ public class MusicApiClient {
                 String name = extractJsonField(objJson, "name");
                 String artist = extractArtistField(objJson);
                 String album = extractJsonField(objJson, "album");
-                String picId = extractJsonField(objJson, "pic_id");
-                if (picId.isBlank()) {
-                    picId = extractJsonField(objJson, "pic");
-                }
-                if (picId.isBlank()) {
-                    picId = id;
-                }
-
                 String lyricId = extractJsonField(objJson, "lyric_id");
                 if (lyricId.isBlank()) {
                     lyricId = id;
@@ -167,9 +294,6 @@ public class MusicApiClient {
 
                 String url = extractJsonField(objJson, "url");
                 String picUrl = extractJsonField(objJson, "pic");
-                if (!picUrl.startsWith("http")) {
-                    picUrl = "";
-                }
 
                 String songSource = extractJsonField(objJson, "source");
                 if (songSource.isBlank()) {
@@ -195,6 +319,14 @@ public class MusicApiClient {
             return json.trim();
         }
         return extractJsonField(json, fieldName);
+    }
+
+    private String extractNestedLyricField(String json) {
+        int lrcIdx = json.indexOf("\"lrc\"");
+        if (lrcIdx == -1) {
+            return "";
+        }
+        return extractJsonField(json.substring(lrcIdx), "lyric");
     }
 
     private List<String> splitJsonObjectsInArray(String json) {
@@ -329,5 +461,80 @@ public class MusicApiClient {
             }
         }
         return extractJsonField(json, "artist");
+    }
+
+    private String extractNetEaseArtists(String json) {
+        int idx = json.indexOf("\"artists\"");
+        if (idx == -1) {
+            return "";
+        }
+        List<String> names = new ArrayList<>();
+        int searchStart = idx;
+        while (true) {
+            int nameIdx = json.indexOf("\"name\"", searchStart);
+            if (nameIdx == -1 || nameIdx > json.indexOf(']', idx) && json.indexOf(']', idx) != -1) {
+                break;
+            }
+            String name = extractJsonField(json.substring(nameIdx), "name");
+            if (!name.isBlank() && !names.contains(name)) {
+                names.add(name);
+            }
+            searchStart = nameIdx + 6;
+        }
+        return String.join(", ", names);
+    }
+
+    private String extractNetEaseAlbum(String json) {
+        int idx = json.indexOf("\"album\"");
+        if (idx == -1) {
+            return "";
+        }
+        return extractJsonField(json.substring(idx), "name");
+    }
+
+    private String extractTopLevelJsonField(String json, String fieldName) {
+        String pattern = "\"" + fieldName + "\"";
+        int depthObj = 0;
+        int depthArr = 0;
+        boolean inString = false;
+        boolean escape = false;
+
+        for (int i = 0; i < json.length() - pattern.length(); i++) {
+            char c = json.charAt(i);
+            if (escape) {
+                escape = false;
+                continue;
+            }
+            if (c == '\\' && inString) {
+                escape = true;
+                continue;
+            }
+            if (c == '"') {
+                inString = !inString;
+                if (inString && depthObj == 1 && depthArr == 0) {
+                    if (json.startsWith(pattern, i)) {
+                        return extractJsonField(json.substring(i), fieldName);
+                    }
+                }
+                continue;
+            }
+            if (inString) {
+                continue;
+            }
+
+            if (c == '{') depthObj++;
+            else if (c == '}') depthObj--;
+            else if (c == '[') depthArr++;
+            else if (c == ']') depthArr--;
+        }
+        return "";
+    }
+
+    private boolean isNumeric(String str) {
+        if (str == null || str.isBlank()) return false;
+        for (char c : str.toCharArray()) {
+            if (!Character.isDigit(c)) return false;
+        }
+        return true;
     }
 }
