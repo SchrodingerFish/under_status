@@ -206,26 +206,23 @@ public class MusicApiClient {
                 String targetUrl = DIRECT_NETEASE_LYRIC_URL + "?id=" + URLEncoder.encode(lyricIdOrSongId, StandardCharsets.UTF_8)
                         + "&lv=1&kv=1&tv=-1";
                 String json = executeGet(targetUrl);
-                if (json.contains("\"lrc\"")) {
-                    String lyric = extractNestedLyricField(json);
-                    if (!lyric.isBlank()) {
-                        return lyric;
-                    }
+                String parsed = extractNestedLyricField(json);
+                if (!parsed.isBlank()) {
+                    return parsed;
                 }
             } catch (Exception ex) {
                 LOGGER.log(Level.FINE, "Direct NetEase fetchLyric failed, trying GDStudio API", ex);
             }
         }
 
-        // Try GDStudio API
+        // Try GDStudio / Meting API
         try {
             String targetUrl = getApiUrl() + "?types=lrc&id=" + URLEncoder.encode(lyricIdOrSongId, StandardCharsets.UTF_8)
                     + "&source=" + sourceParam;
             String response = executeGet(targetUrl);
-            if (response.startsWith("{") && response.contains("\"lyric\"")) {
-                return parseSingleUrlField(response, "lyric");
-            } else if (response.contains("[")) {
-                return response;
+            String parsed = extractNestedLyricField(response);
+            if (!parsed.isBlank()) {
+                return parsed;
             }
         } catch (Exception ex) {
             LOGGER.log(Level.FINE, "GDStudio fetchLyric failed", ex);
@@ -330,18 +327,35 @@ public class MusicApiClient {
         return extractJsonField(json, fieldName);
     }
 
+    String fetchLyricFromJsonForTest(String json) {
+        return extractNestedLyricField(json);
+    }
+
     private String extractNestedLyricField(String json) {
         if (json == null || json.isBlank()) {
             return "";
         }
-        int lrcIdx = json.indexOf("\"lrc\":");
-        if (lrcIdx == -1) {
-            lrcIdx = json.indexOf("\"lrc\" :");
+        String trimmed = json.trim();
+        if (trimmed.startsWith("[")) {
+            return trimmed;
         }
+
+        int lrcIdx = trimmed.indexOf("\"lrc\":");
         if (lrcIdx == -1) {
-            return "";
+            lrcIdx = trimmed.indexOf("\"lrc\" :");
         }
-        return extractJsonField(json.substring(lrcIdx), "lyric");
+        if (lrcIdx != -1) {
+            String val = extractJsonField(trimmed.substring(lrcIdx), "lyric");
+            if (!val.isBlank()) {
+                return val;
+            }
+        }
+
+        if (trimmed.contains("\"lyric\"")) {
+            return extractJsonField(trimmed, "lyric");
+        }
+
+        return "";
     }
 
     private List<String> splitJsonObjectsInArray(String json) {

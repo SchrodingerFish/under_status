@@ -30,4 +30,20 @@ class MusicApiClientTest {
         assertTrue(lyric.contains("海阔天空") || lyric.contains("黄家驹") || lyric.contains("[00:"),
                 "Lyric should contain LRC timestamps or text content");
     }
+
+    @Test
+    void testParseGdstudioLyricJson() {
+        String json = "{\n"
+                + "    \"lyric\": \"[00:00.00] 作曲 : 陈信义\\n[00:01.00] 作词 : 娃娃\\n[00:28.90]真情像草原广阔\",\n"
+                + "    \"tlyric\": \"\",\n"
+                + "    \"from\": \"music.gdstudio.xyz\"\n"
+                + "}";
+
+        List<LrcParser.LrcLine> parsed = LrcParser.parse(
+                new MusicApiClient().fetchLyricFromJsonForTest(json));
+
+        assertFalse(parsed.isEmpty(), "GDStudio lyric JSON should parse correctly into LrcLine list");
+        assertTrue(parsed.get(0).getText().contains("陈信义") || parsed.get(1).getText().contains("娃娃"),
+                "Lyric text should be extracted properly");
+    }
 }
