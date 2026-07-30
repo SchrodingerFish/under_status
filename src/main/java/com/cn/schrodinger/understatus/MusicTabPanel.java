@@ -592,7 +592,7 @@ public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerList
 
                 // Fetch lyric
                 String lrc = song.getLyric();
-                if (lrc == null || lrc.isBlank()) {
+                if (lrc == null || lrc.isBlank() || isNumeric(lrc)) {
                     lrc = apiClient.fetchLyric(song.getId(), song.getSource());
                     song.setLyric(lrc);
                 }
@@ -757,5 +757,13 @@ public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerList
     @Override
     public void onError(String message) {
         searchStatusLabel.setText("❌ " + message);
+    }
+
+    private boolean isNumeric(String str) {
+        if (str == null || str.isBlank()) return false;
+        for (char c : str.toCharArray()) {
+            if (!Character.isDigit(c)) return false;
+        }
+        return true;
     }
 }

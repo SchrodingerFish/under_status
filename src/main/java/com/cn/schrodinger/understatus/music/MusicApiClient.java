@@ -128,7 +128,7 @@ public class MusicApiClient {
                 String url = DIRECT_NETEASE_PLAY_URL + id + ".mp3";
 
                 if (!id.isBlank() && !name.isBlank()) {
-                    MusicSong song = new MusicSong(id, name, artist, album, "netease", url, "", id);
+                    MusicSong song = new MusicSong(id, name, artist, album, "netease", url, "", "");
                     list.add(song);
                 }
             } catch (Exception ex) {
@@ -307,7 +307,7 @@ public class MusicApiClient {
                 }
 
                 if (!id.isBlank() || !name.isBlank()) {
-                    MusicSong song = new MusicSong(id, name, artist, album, songSource, url, picUrl, lyricId);
+                    MusicSong song = new MusicSong(id, name, artist, album, songSource, url, picUrl, "");
                     list.add(song);
                 }
             } catch (Exception ex) {
