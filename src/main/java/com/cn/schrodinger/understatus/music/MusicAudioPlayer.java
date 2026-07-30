@@ -95,16 +95,9 @@ public class MusicAudioPlayer {
         progressTimer.start();
 
         executor.submit(() -> {
+            long startTime = System.currentTimeMillis();
             try {
-                URL url = URI.create(audioUrl).toURL();
-                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                conn.setRequestProperty("User-Agent", USER_AGENT);
-                conn.setConnectTimeout(10000);
-                conn.setReadTimeout(15000);
-                conn.setInstanceFollowRedirects(true);
-
-                InputStream rawStream = conn.getInputStream();
-                BufferedInputStream bufferedStream = new BufferedInputStream(rawStream, 64 * 1024);
+                BufferedInputStream bufferedStream = openAudioStream(audioUrl);
 
                 synchronized (MusicAudioPlayer.this) {
                     currentAudioStream = bufferedStream;
@@ -113,13 +106,17 @@ public class MusicAudioPlayer {
 
                 currentJlayerPlayer.play();
 
-                // Playback finished normally
+                long elapsed = System.currentTimeMillis() - startTime;
                 synchronized (MusicAudioPlayer.this) {
                     boolean finishedNaturally = isPlaying && !userStopped && !isPaused;
                     stopInternal(false);
-                    if (finishedNaturally && listener != null) {
-                        final MusicSong completed = song;
-                        SwingUtilities.invokeLater(() -> listener.onSongFinished(completed));
+                    if (finishedNaturally) {
+                        if (elapsed > 1500 && listener != null) {
+                            final MusicSong completed = song;
+                            SwingUtilities.invokeLater(() -> listener.onSongFinished(completed));
+                        } else {
+                            notifyError("音频无法解析或音轨无效");
+                        }
                     }
                 }
             } catch (Exception ex) {
@@ -218,6 +215,39 @@ public class MusicAudioPlayer {
         if (listener != null) {
             SwingUtilities.invokeLater(() -> listener.onError(msg));
         }
+    }
+
+    private BufferedInputStream openAudioStream(String audioUrlStr) throws Exception {
+        String currentUrl = audioUrlStr;
+        for (int attempt = 0; attempt < 5; attempt++) {
+            URL url = URI.create(currentUrl).toURL();
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestProperty("User-Agent", USER_AGENT);
+            conn.setRequestProperty("Accept", "*/*");
+            conn.setRequestProperty("Referer", "https://music.163.com/");
+            conn.setConnectTimeout(10000);
+            conn.setReadTimeout(15000);
+            conn.setInstanceFollowRedirects(true);
+
+            int code = conn.getResponseCode();
+            if (code == HttpURLConnection.HTTP_MOVED_PERM || code == HttpURLConnection.HTTP_MOVED_TEMP
+                    || code == 307 || code == 308) {
+                String location = conn.getHeaderField("Location");
+                if (location != null && !location.isBlank()) {
+                    currentUrl = location.startsWith("http") ? location : "https://music.163.com" + location;
+                    conn.disconnect();
+                    continue;
+                }
+            }
+
+            if (code >= 400) {
+                conn.disconnect();
+                throw new Exception("HTTP " + code);
+            }
+
+            return new BufferedInputStream(conn.getInputStream(), 64 * 1024);
+        }
+        throw new Exception("Too many redirects for " + audioUrlStr);
     }
 
     public void close() {
