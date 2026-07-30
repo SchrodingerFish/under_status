@@ -277,14 +277,16 @@ public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerList
                 JLabel label = (JLabel) super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
                 label.setHorizontalAlignment(SwingConstants.CENTER);
                 if (value instanceof LrcParser.LrcLine) {
-                    label.setText(((LrcParser.LrcLine) value).getText());
+                    LrcParser.LrcLine line = (LrcParser.LrcLine) value;
+                    label.setText(line.getText().isBlank() ? "♪ ♪ ♪" : line.getText());
                 }
                 if (isSelected) {
-                    label.setFont(label.getFont().deriveFont(Font.BOLD, 13f));
+                    label.setFont(label.getFont().deriveFont(Font.BOLD, 14f));
                     label.setForeground(new Color(0, 120, 215));
                 } else {
                     label.setFont(label.getFont().deriveFont(Font.PLAIN, 12f));
                 }
+                label.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
                 return label;
             }
         });
@@ -641,13 +643,15 @@ public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerList
 
     private void updateLyricList(List<LrcParser.LrcLine> lines) {
         lyricListModel.clear();
-        if (lines.isEmpty()) {
-            lyricListModel.addElement(new LrcParser.LrcLine(0, "（暂无纯文本歌词）"));
+        if (lines == null || lines.isEmpty()) {
+            lyricListModel.addElement(new LrcParser.LrcLine(0, "（暂无文本歌词）"));
         } else {
             for (LrcParser.LrcLine line : lines) {
                 lyricListModel.addElement(line);
             }
         }
+        lyricList.revalidate();
+        lyricList.repaint();
     }
 
     private void playNext(boolean autoFinish) {

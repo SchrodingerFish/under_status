@@ -247,8 +247,8 @@ public class BottomToolbarView extends JPanel {
         alarmButton.addActionListener(e -> showAlarmSettingsDialog());
 
         // 9. Music Player Button
-        musicButton = createFlatButton("🎵 音乐", "点击开启在线音乐播放器 (Online Music Player)");
-        musicButton.addActionListener(e -> showQuickNoteCalcDialog());
+        musicButton = createFlatButton("🎵 音乐", "点击开启独立音乐播放器窗口 (Standalone Music Player)");
+        musicButton.addActionListener(e -> MusicPlayerDialog.showDialog(null));
 
         // 10. Settings gear button (Always visible at the end)
         settingButton = createFlatButton("⚙️", "点击打开状态栏与工具箱配置 (Configure status bar & toolbox)");

@@ -7,7 +7,6 @@ import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URL;
-import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.logging.Level;
@@ -39,6 +38,7 @@ public class MusicAudioPlayer {
 
     private Player currentJlayerPlayer;
     private InputStream currentAudioStream;
+    private HttpURLConnection currentHttpConn;
     private MusicSong currentSong;
     private volatile boolean isPlaying;
     private volatile boolean isPaused;
@@ -94,12 +94,20 @@ public class MusicAudioPlayer {
         notifyStatusChanged();
         progressTimer.start();
 
+        final MusicSong targetSong = song;
         executor.submit(() -> {
             long startTime = System.currentTimeMillis();
             try {
                 BufferedInputStream bufferedStream = openAudioStream(audioUrl);
 
                 synchronized (MusicAudioPlayer.this) {
+                    if (userStopped || currentSong != targetSong) {
+                        try {
+                            bufferedStream.close();
+                        } catch (Exception ignored) {
+                        }
+                        return;
+                    }
                     currentAudioStream = bufferedStream;
                     currentJlayerPlayer = new Player(bufferedStream);
                 }
@@ -108,12 +116,11 @@ public class MusicAudioPlayer {
 
                 long elapsed = System.currentTimeMillis() - startTime;
                 synchronized (MusicAudioPlayer.this) {
-                    boolean finishedNaturally = isPlaying && !userStopped && !isPaused;
+                    boolean finishedNaturally = isPlaying && !userStopped && !isPaused && currentSong == targetSong;
                     stopInternal(false);
                     if (finishedNaturally) {
                         if (elapsed > 1500 && listener != null) {
-                            final MusicSong completed = song;
-                            SwingUtilities.invokeLater(() -> listener.onSongFinished(completed));
+                            SwingUtilities.invokeLater(() -> listener.onSongFinished(targetSong));
                         } else {
                             notifyError("音频无法解析或音轨无效");
                         }
@@ -122,7 +129,7 @@ public class MusicAudioPlayer {
             } catch (Exception ex) {
                 LOGGER.log(Level.WARNING, "Error playing audio stream", ex);
                 synchronized (MusicAudioPlayer.this) {
-                    boolean failedWhilePlaying = isPlaying && !userStopped;
+                    boolean failedWhilePlaying = isPlaying && !userStopped && currentSong == targetSong;
                     stopInternal(false);
                     if (failedWhilePlaying) {
                         notifyError("音频播放失败: " + ex.getMessage());
@@ -185,6 +192,14 @@ public class MusicAudioPlayer {
     }
 
     private void stopJlayerOnly() {
+        if (currentHttpConn != null) {
+            try {
+                currentHttpConn.disconnect();
+            } catch (Exception ex) {
+                LOGGER.log(Level.FINE, "Error disconnecting HTTP connection", ex);
+            }
+            currentHttpConn = null;
+        }
         if (currentJlayerPlayer != null) {
             try {
                 currentJlayerPlayer.close();
@@ -222,6 +237,10 @@ public class MusicAudioPlayer {
         for (int attempt = 0; attempt < 5; attempt++) {
             URL url = URI.create(currentUrl).toURL();
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            synchronized (this) {
+                currentHttpConn = conn;
+            }
+
             conn.setRequestProperty("User-Agent", USER_AGENT);
             conn.setRequestProperty("Accept", "*/*");
             conn.setRequestProperty("Referer", "https://music.163.com/");

@@ -33,6 +33,11 @@ public final class LrcParser {
         public String getText() {
             return text;
         }
+
+        @Override
+        public String toString() {
+            return text.isBlank() ? "♪ ♪ ♪" : text;
+        }
     }
 
     public static List<LrcLine> parse(String lrcContent) {
@@ -41,7 +46,8 @@ public final class LrcParser {
         }
 
         List<LrcLine> list = new ArrayList<>();
-        String[] lines = lrcContent.split("\\r?\\n");
+        String cleaned = lrcContent.replace("\\n", "\n").replace("\\r", "");
+        String[] lines = cleaned.split("\n");
 
         for (String line : lines) {
             if (line.isBlank()) {
@@ -75,6 +81,18 @@ public final class LrcParser {
                 String lyricText = line.substring(lastIndex).trim();
                 for (Long ts : timestamps) {
                     list.add(new LrcLine(ts, lyricText));
+                }
+            }
+        }
+
+        // Fallback for plain text lyrics without time tags
+        if (list.isEmpty()) {
+            long tsCounter = 0;
+            for (String line : lines) {
+                String trimmed = line.trim();
+                if (!trimmed.isBlank() && !trimmed.startsWith("{") && !trimmed.endsWith("}")) {
+                    list.add(new LrcLine(tsCounter, trimmed));
+                    tsCounter += 3000;
                 }
             }
         }
