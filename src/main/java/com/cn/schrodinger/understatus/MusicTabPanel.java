@@ -575,25 +575,36 @@ public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerList
         ASYNC_WORKER.post(() -> {
             try {
                 // Fetch real audio play URL
-                String audioUrl = apiClient.fetchSongUrl(song.getId(), song.getSource());
-                song.setUrl(audioUrl);
+                String audioUrl = song.getUrl();
+                if (audioUrl == null || audioUrl.isBlank()) {
+                    audioUrl = apiClient.fetchSongUrl(song.getId(), song.getSource());
+                    song.setUrl(audioUrl);
+                }
 
                 // Fetch album art cover
-                String picUrl = apiClient.fetchPicUrl(song.getId(), song.getSource());
-                song.setPicUrl(picUrl);
+                String picUrl = song.getPicUrl();
+                if (picUrl == null || picUrl.isBlank()) {
+                    picUrl = apiClient.fetchPicUrl(song.getId(), song.getSource());
+                    song.setPicUrl(picUrl);
+                }
 
                 // Fetch lyric
-                String lrc = apiClient.fetchLyric(song.getId(), song.getSource());
-                song.setLyric(lrc);
+                String lrc = song.getLyric();
+                if (lrc == null || lrc.isBlank()) {
+                    lrc = apiClient.fetchLyric(song.getId(), song.getSource());
+                    song.setLyric(lrc);
+                }
                 List<LrcParser.LrcLine> lrcLines = LrcParser.parse(lrc);
 
+                final String finalAudioUrl = audioUrl;
+                final String finalPicUrl = picUrl;
                 SwingUtilities.invokeLater(() -> {
                     currentLyrics = lrcLines;
                     updateLyricList(lrcLines);
-                    loadCoverImage(picUrl);
+                    loadCoverImage(finalPicUrl);
 
                     searchStatusLabel.setText("▶️ 正在播放: " + song.getName());
-                    audioPlayer.play(song, audioUrl);
+                    audioPlayer.play(song, finalAudioUrl);
                 });
             } catch (Exception ex) {
                 LOGGER.log(Level.WARNING, "Failed to resolve song details", ex);

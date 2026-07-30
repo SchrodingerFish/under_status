@@ -31,7 +31,7 @@ public class MusicApiClient {
     private static final String USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
             + "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
-    private static final int TIMEOUT_MS = 10000;
+    private static final int TIMEOUT_MS = 4000;
 
     public MusicApiClient() {
     }
@@ -147,7 +147,12 @@ public class MusicApiClient {
         }
         String sourceParam = (source == null || source.isBlank()) ? "netease" : source.toLowerCase();
 
-        // Strategy 1: Try GDStudio API
+        // Instant direct NetEase audio stream URL (Zero network delay)
+        if ("netease".equals(sourceParam) || isNumeric(songId)) {
+            return DIRECT_NETEASE_PLAY_URL + songId + ".mp3";
+        }
+
+        // Try GDStudio API for non-NetEase sources
         try {
             String targetUrl = getApiUrl() + "?types=url&id=" + URLEncoder.encode(songId, StandardCharsets.UTF_8)
                     + "&source=" + sourceParam + "&br=320";
@@ -157,13 +162,9 @@ public class MusicApiClient {
                 return url;
             }
         } catch (Exception ex) {
-            LOGGER.log(Level.FINE, "GDStudio fetchSongUrl failed, using direct URL fallback", ex);
+            LOGGER.log(Level.FINE, "GDStudio fetchSongUrl failed", ex);
         }
 
-        // Strategy 2: Direct NetEase audio stream fallback
-        if ("netease".equals(sourceParam) || isNumeric(songId)) {
-            return DIRECT_NETEASE_PLAY_URL + songId + ".mp3";
-        }
         return "";
     }
 
@@ -173,6 +174,9 @@ public class MusicApiClient {
     public String fetchPicUrl(String picIdOrSongId, String source) throws Exception {
         if (picIdOrSongId == null || picIdOrSongId.isBlank()) {
             return "";
+        }
+        if (picIdOrSongId.startsWith("http")) {
+            return picIdOrSongId;
         }
         String sourceParam = (source == null || source.isBlank()) ? "netease" : source.toLowerCase();
 
@@ -196,7 +200,24 @@ public class MusicApiClient {
         }
         String sourceParam = (source == null || source.isBlank()) ? "netease" : source.toLowerCase();
 
-        // Strategy 1: Try GDStudio API
+        // Fast path: Direct NetEase Lyric API
+        if ("netease".equals(sourceParam) || isNumeric(lyricIdOrSongId)) {
+            try {
+                String targetUrl = DIRECT_NETEASE_LYRIC_URL + "?id=" + URLEncoder.encode(lyricIdOrSongId, StandardCharsets.UTF_8)
+                        + "&lv=1&kv=1&tv=-1";
+                String json = executeGet(targetUrl);
+                if (json.contains("\"lrc\"")) {
+                    String lyric = extractNestedLyricField(json);
+                    if (!lyric.isBlank()) {
+                        return lyric;
+                    }
+                }
+            } catch (Exception ex) {
+                LOGGER.log(Level.FINE, "Direct NetEase fetchLyric failed, trying GDStudio API", ex);
+            }
+        }
+
+        // Try GDStudio API
         try {
             String targetUrl = getApiUrl() + "?types=lrc&id=" + URLEncoder.encode(lyricIdOrSongId, StandardCharsets.UTF_8)
                     + "&source=" + sourceParam;
@@ -207,19 +228,7 @@ public class MusicApiClient {
                 return response;
             }
         } catch (Exception ex) {
-            LOGGER.log(Level.FINE, "GDStudio fetchLyric failed, attempting direct NetEase lyric", ex);
-        }
-
-        // Strategy 2: Try Direct NetEase Lyric API
-        try {
-            String targetUrl = DIRECT_NETEASE_LYRIC_URL + "?id=" + URLEncoder.encode(lyricIdOrSongId, StandardCharsets.UTF_8)
-                    + "&lv=1&kv=1&tv=-1";
-            String json = executeGet(targetUrl);
-            if (json.contains("\"lrc\"")) {
-                return extractNestedLyricField(json);
-            }
-        } catch (Exception ex) {
-            LOGGER.log(Level.FINE, "Direct NetEase fetchLyric failed", ex);
+            LOGGER.log(Level.FINE, "GDStudio fetchLyric failed", ex);
         }
 
         return "";
