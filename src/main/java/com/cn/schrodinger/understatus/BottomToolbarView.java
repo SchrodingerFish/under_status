@@ -64,6 +64,7 @@ public class BottomToolbarView extends JPanel {
     private JLabel metricsLabel;
     private JButton noteButton; // "🧰 工具宝库"
     private JButton alarmButton;
+    private JButton musicButton; // "🎵 音乐"
     private JButton settingButton; // "⚙️"
 
     // Clock formatting
@@ -86,6 +87,7 @@ public class BottomToolbarView extends JPanel {
     private boolean showMetrics = true;
     private boolean showNote = true;
     private boolean showAlarms = true;
+    private boolean showMusic = true;
 
     // Weather states
     private JLabel weatherLabel;
@@ -244,7 +246,11 @@ public class BottomToolbarView extends JPanel {
         alarmButton = createFlatButton("⏰ 闹钟", "点击配置定时闹钟 (Alarms settings only)");
         alarmButton.addActionListener(e -> showAlarmSettingsDialog());
 
-        // 9. Settings gear button (Always visible at the end)
+        // 9. Music Player Button
+        musicButton = createFlatButton("🎵 音乐", "点击开启在线音乐播放器 (Online Music Player)");
+        musicButton.addActionListener(e -> showQuickNoteCalcDialog());
+
+        // 10. Settings gear button (Always visible at the end)
         settingButton = createFlatButton("⚙️", "点击打开状态栏与工具箱配置 (Configure status bar & toolbox)");
         settingButton.addActionListener(e -> showGeneralSettingsDialog());
     }
@@ -529,6 +535,7 @@ public class BottomToolbarView extends JPanel {
         metricsLabel.setVisible(showMetrics = settings.showMetrics());
         noteButton.setVisible(showNote = settings.showToolbox());
         alarmButton.setVisible(showAlarms = settings.showAlarms());
+        musicButton.setVisible(showMusic = settings.showMusic());
 
         // 5. Weather settings
         boolean prevShowWeather = showWeather;
@@ -615,6 +622,11 @@ public class BottomToolbarView extends JPanel {
         if (showAlarms) {
             if (!first) add(createSeparator());
             add(alarmButton);
+            first = false;
+        }
+        if (showMusic) {
+            if (!first) add(createSeparator());
+            add(musicButton);
         }
 
         // Setting gear is always appended

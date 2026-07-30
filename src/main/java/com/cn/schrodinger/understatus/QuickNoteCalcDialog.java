@@ -65,6 +65,7 @@ public class QuickNoteCalcDialog extends JDialog {
         tabbedPane.addTab("文本对比 (Diff)", new DiffTabPanel());
         tabbedPane.addTab("Cron解析 (Cron)", new CronTabPanel());
         tabbedPane.addTab("生成器 (Gen)", new GenTabPanel());
+        tabbedPane.addTab("音乐播放器 (Music)", new MusicTabPanel());
 
         add(tabbedPane, BorderLayout.CENTER);
 

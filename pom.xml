@@ -133,6 +133,13 @@
             <version>${netbeans.version}</version>
         </dependency>
 
+        <!-- Audio MP3 Decoding -->
+        <dependency>
+            <groupId>javazoom</groupId>
+            <artifactId>jlayer</artifactId>
+            <version>1.0.1</version>
+        </dependency>
+
         <!-- Test -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>

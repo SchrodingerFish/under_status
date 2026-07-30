@@ -58,9 +58,13 @@ public class ToolbarSettingDialog extends JDialog {
     private JCheckBox metricsShowCB;
     private JCheckBox noteShowCB;
     private JCheckBox alarmsShowCB;
+    private JCheckBox musicShowCB;
 
     // Toolbox Size Presets
     private JComboBox<String> toolboxSizeComboBox;
+
+    // Music API elements
+    private JTextField musicApiHostField;
 
     // Weather elements
     private JCheckBox showWeatherCB;
@@ -111,7 +115,10 @@ public class ToolbarSettingDialog extends JDialog {
         // Tab 3: Weather
         tabbedPane.addTab("天气配置 (Weather)", createWeatherTab());
 
-        // Tab 4: Toolbar config
+        // Tab 4: Music
+        tabbedPane.addTab("音乐配置 (Music)", createMusicTab());
+
+        // Tab 5: Toolbar config
         tabbedPane.addTab("工具栏与常规配置 (Settings)", createToolbarConfigTab());
 
         // Bottom Buttons
@@ -265,6 +272,28 @@ public class ToolbarSettingDialog extends JDialog {
         return panel;
     }
 
+    private JPanel createMusicTab() {
+        JPanel panel = new JPanel(new GridBagLayout());
+        panel.setBorder(BorderFactory.createEmptyBorder(15, 15, 15, 15));
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.insets = new Insets(8, 8, 8, 8);
+
+        gbc.gridx = 0; gbc.gridy = 0;
+        panel.add(new JLabel("自定义 API Endpoint (可选):"), gbc);
+        musicApiHostField = new JTextField(24);
+        gbc.gridx = 1;
+        panel.add(musicApiHostField, gbc);
+
+        gbc.gridx = 0; gbc.gridy = 1; gbc.gridwidth = 2;
+        JLabel helpLabel = new JLabel("默认: https://music-api.gdstudio.xyz/api.php（留空使用默认）");
+        helpLabel.setFont(helpLabel.getFont().deriveFont(11f));
+        helpLabel.setForeground(java.awt.Color.GRAY);
+        panel.add(helpLabel, gbc);
+
+        return panel;
+    }
+
     private JPanel createToolbarConfigTab() {
         JPanel mainPanel = new JPanel(new BorderLayout(10, 10));
         mainPanel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
@@ -287,7 +316,7 @@ public class ToolbarSettingDialog extends JDialog {
         mainPanel.add(sizePanel, BorderLayout.NORTH);
 
         // Checkboxes Panel at Center
-        JPanel cbPanel = new JPanel(new GridLayout(4, 2, 10, 10));
+        JPanel cbPanel = new JPanel(new GridLayout(5, 2, 10, 10));
         clockShowCB = new JCheckBox("显示时钟 (Clock Label)");
         formatShowCB = new JCheckBox("显示代码格式化按钮 (Formatter)");
         memoryShowCB = new JCheckBox("显示内存监控与一键GC (JVM GC)");
@@ -296,6 +325,7 @@ public class ToolbarSettingDialog extends JDialog {
         metricsShowCB = new JCheckBox("显示文档字数与编码 (File Metrics)");
         noteShowCB = new JCheckBox("显示开发者工具箱 (Developer Vault)");
         alarmsShowCB = new JCheckBox("显示定时闹钟按钮 (Alarms Status)");
+        musicShowCB = new JCheckBox("显示在线音乐播放器 (Music)");
 
         cbPanel.add(clockShowCB);
         cbPanel.add(formatShowCB);
@@ -305,6 +335,7 @@ public class ToolbarSettingDialog extends JDialog {
         cbPanel.add(metricsShowCB);
         cbPanel.add(noteShowCB);
         cbPanel.add(alarmsShowCB);
+        cbPanel.add(musicShowCB);
 
         mainPanel.add(cbPanel, BorderLayout.CENTER);
         return mainPanel;
@@ -360,6 +391,8 @@ public class ToolbarSettingDialog extends JDialog {
         metricsShowCB.setSelected(settings.showMetrics());
         noteShowCB.setSelected(settings.showToolbox());
         alarmsShowCB.setSelected(settings.showAlarms());
+        musicShowCB.setSelected(settings.showMusic());
+        musicApiHostField.setText(settings.musicApiHost());
 
         // Load popover size
         int savedW = settings.toolboxWidth();
@@ -420,6 +453,8 @@ public class ToolbarSettingDialog extends JDialog {
                 noteShowCB.isSelected(),
                 alarmsShowCB.isSelected(),
                 showWeatherCB.isSelected(),
+                musicShowCB.isSelected(),
+                musicApiHostField.getText().trim(),
                 apiHostField.getText().trim(),
                 new String(apiKeyField.getPassword()).trim(),
                 cityField.getText().trim(),

@@ -1,8 +1,8 @@
 package com.cn.schrodinger.understatus.settings;
 
 import java.time.format.DateTimeFormatter;
-import java.util.Objects;
 import java.util.HashMap;
+import java.util.Objects;
 import org.openide.util.NbPreferences;
 
 public final class SettingsRepository {
@@ -43,6 +43,8 @@ public final class SettingsRepository {
                 store.getBoolean("showNote", true),
                 store.getBoolean("showAlarms", true),
                 store.getBoolean("showWeather", false),
+                store.getBoolean("showMusic", true),
+                store.get("musicApiHost", ""),
                 store.get("qweatherApiHost", ""),
                 secrets.read(WEATHER_SECRET),
                 store.get("qweatherCity", "北京"),
@@ -64,6 +66,8 @@ public final class SettingsRepository {
         store.putBoolean("showNote", settings.showToolbox());
         store.putBoolean("showAlarms", settings.showAlarms());
         store.putBoolean("showWeather", settings.showWeather());
+        store.putBoolean("showMusic", settings.showMusic());
+        store.put("musicApiHost", settings.musicApiHost());
         store.put("qweatherApiHost", settings.qweatherApiHost());
         if (settings.qweatherApiKey().isBlank()) secrets.delete(WEATHER_SECRET);
         else secrets.write(WEATHER_SECRET, settings.qweatherApiKey());
@@ -77,6 +81,8 @@ public final class SettingsRepository {
     public void saveAlarms(String alarms) { store.put("alarmsList", alarms == null ? "" : alarms); }
     public String loadNotes() { return store.get("notesListSerialized", ""); }
     public void saveNotes(String notes) { store.put("notesListSerialized", notes == null ? "" : notes); }
+    public String loadFavorites() { return store.get("musicFavoritesSerialized", ""); }
+    public void saveFavorites(String favorites) { store.put("musicFavoritesSerialized", favorites == null ? "" : favorites); }
 
     private static String validClockPattern(String pattern) {
         try {
