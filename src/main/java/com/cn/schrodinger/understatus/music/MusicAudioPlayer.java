@@ -46,6 +46,9 @@ public class MusicAudioPlayer {
     private PlayerListener listener;
     private javax.swing.Timer progressTimer;
 
+    private long playGeneration = 0;
+    private long playbackStartTimestamp = 0;
+
     public MusicAudioPlayer() {
         initProgressTimer();
     }
@@ -55,9 +58,18 @@ public class MusicAudioPlayer {
     }
 
     private void initProgressTimer() {
-        progressTimer = new javax.swing.Timer(500, e -> {
-            if (isPlaying && currentJlayerPlayer != null && listener != null) {
-                long pos = currentJlayerPlayer.getPosition();
+        progressTimer = new javax.swing.Timer(150, e -> {
+            if (isPlaying && listener != null) {
+                long pos = -1;
+                if (currentJlayerPlayer != null) {
+                    try {
+                        pos = currentJlayerPlayer.getPosition();
+                    } catch (Exception ignored) {
+                    }
+                }
+                if (pos <= 0 && playbackStartTimestamp > 0) {
+                    pos = System.currentTimeMillis() - playbackStartTimestamp;
+                }
                 listener.onProgress(pos);
             }
         });
@@ -79,6 +91,9 @@ public class MusicAudioPlayer {
      * Play given song audio stream.
      */
     public synchronized void play(MusicSong song, String audioUrl) {
+        this.playGeneration++;
+        final long generation = this.playGeneration;
+
         stopInternal(false);
 
         if (song == null || audioUrl == null || audioUrl.isBlank()) {
@@ -90,18 +105,25 @@ public class MusicAudioPlayer {
         this.isPlaying = true;
         this.isPaused = false;
         this.userStopped = false;
+        this.playbackStartTimestamp = System.currentTimeMillis();
 
         notifyStatusChanged();
         progressTimer.start();
 
         final MusicSong targetSong = song;
         executor.submit(() -> {
+            synchronized (MusicAudioPlayer.this) {
+                if (generation != playGeneration || userStopped) {
+                    return;
+                }
+            }
+
             long startTime = System.currentTimeMillis();
             try {
                 BufferedInputStream bufferedStream = openAudioStream(audioUrl);
 
                 synchronized (MusicAudioPlayer.this) {
-                    if (userStopped || currentSong != targetSong) {
+                    if (generation != playGeneration || userStopped || currentSong != targetSong) {
                         try {
                             bufferedStream.close();
                         } catch (Exception ignored) {
@@ -110,15 +132,16 @@ public class MusicAudioPlayer {
                     }
                     currentAudioStream = bufferedStream;
                     currentJlayerPlayer = new Player(bufferedStream);
+                    playbackStartTimestamp = System.currentTimeMillis();
                 }
 
                 currentJlayerPlayer.play();
 
                 long elapsed = System.currentTimeMillis() - startTime;
                 synchronized (MusicAudioPlayer.this) {
-                    boolean finishedNaturally = isPlaying && !userStopped && !isPaused && currentSong == targetSong;
-                    stopInternal(false);
+                    boolean finishedNaturally = generation == playGeneration && isPlaying && !userStopped && !isPaused && currentSong == targetSong;
                     if (finishedNaturally) {
+                        stopInternal(false);
                         if (elapsed > 1500 && listener != null) {
                             SwingUtilities.invokeLater(() -> listener.onSongFinished(targetSong));
                         } else {
@@ -129,9 +152,9 @@ public class MusicAudioPlayer {
             } catch (Exception ex) {
                 LOGGER.log(Level.WARNING, "Error playing audio stream", ex);
                 synchronized (MusicAudioPlayer.this) {
-                    boolean failedWhilePlaying = isPlaying && !userStopped && currentSong == targetSong;
-                    stopInternal(false);
+                    boolean failedWhilePlaying = generation == playGeneration && isPlaying && !userStopped && currentSong == targetSong;
                     if (failedWhilePlaying) {
+                        stopInternal(false);
                         notifyError("音频播放失败: " + ex.getMessage());
                     }
                 }

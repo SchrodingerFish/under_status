@@ -17,14 +17,19 @@ import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Image;
 import java.awt.Insets;
+import java.awt.Rectangle;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import javax.imageio.ImageIO;
@@ -47,6 +52,7 @@ import javax.swing.JSplitPane;
 import javax.swing.JTabbedPane;
 import javax.swing.JTable;
 import javax.swing.JTextField;
+import javax.swing.JViewport;
 import javax.swing.ListSelectionModel;
 import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
@@ -62,18 +68,22 @@ import org.openide.util.RequestProcessor;
 public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerListener {
 
     private static final Logger LOGGER = Logger.getLogger(MusicTabPanel.class.getName());
-    private static final RequestProcessor ASYNC_WORKER = new RequestProcessor("MusicTabPanel Worker", 2, true);
+    private static final RequestProcessor ASYNC_WORKER = new RequestProcessor("MusicTabPanel Worker", 4, true);
 
     // API & Player Engine
     private final MusicApiClient apiClient = new MusicApiClient();
     private final MusicAudioPlayer audioPlayer = new MusicAudioPlayer();
     private final Random random = new Random();
 
-    // Data lists
+    // Data lists & Cache
     private final List<MusicSong> searchResults = new ArrayList<>();
     private final List<MusicSong> playlist = new ArrayList<>();
     private final List<MusicSong> favorites = new ArrayList<>();
     private List<LrcParser.LrcLine> currentLyrics = new ArrayList<>();
+
+    private final Map<String, ImageIcon> coverCache = new ConcurrentHashMap<>();
+    private final Map<String, List<LrcParser.LrcLine>> lyricCache = new ConcurrentHashMap<>();
+    private int lastActiveLyricIndex = -1;
 
     // Playback state
     private PlaybackMode currentMode = PlaybackMode.LIST_LOOP;
@@ -291,6 +301,14 @@ public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerList
             }
         });
         centerTabbedPane.addTab("🎤 动态歌词", new JScrollPane(lyricList));
+        centerTabbedPane.addChangeListener(e -> {
+            if (centerTabbedPane.getSelectedIndex() == 3) {
+                int idx = lyricList.getSelectedIndex();
+                if (idx >= 0) {
+                    SwingUtilities.invokeLater(() -> scrollLyricToCenter(idx));
+                }
+            }
+        });
 
         add(centerTabbedPane, BorderLayout.CENTER);
 
@@ -572,52 +590,72 @@ public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerList
         favoriteButton.setText(favorites.contains(song) ? "❤️" : "♡");
         isFavoriteCurrent = favorites.contains(song);
 
-        searchStatusLabel.setText("⌛ 正在解析歌曲播放地址: " + song.getName());
+        // Reset cover & lyric state
+        coverLabel.setIcon(null);
+        coverLabel.setText("🎵");
+        lastActiveLyricIndex = -1;
 
+        searchStatusLabel.setText("▶️ 正在播放: " + song.getName());
+
+        // 1. Instantly resolve audio URL and start playback
         ASYNC_WORKER.post(() -> {
             try {
-                // Fetch real audio play URL
                 String audioUrl = song.getUrl();
                 if (audioUrl == null || audioUrl.isBlank()) {
                     audioUrl = apiClient.fetchSongUrl(song.getId(), song.getSource());
                     song.setUrl(audioUrl);
                 }
-
-                // Fetch album art cover
-                String picUrl = song.getPicUrl();
-                if (picUrl == null || picUrl.isBlank()) {
-                    picUrl = apiClient.fetchPicUrl(song.getId(), song.getSource());
-                    song.setPicUrl(picUrl);
-                }
-
-                // Fetch lyric
-                String lrc = song.getLyric();
-                if (lrc == null || lrc.isBlank() || isNumeric(lrc)) {
-                    lrc = apiClient.fetchLyric(song.getId(), song.getSource());
-                    song.setLyric(lrc);
-                }
-                List<LrcParser.LrcLine> lrcLines = LrcParser.parse(lrc);
-
                 final String finalAudioUrl = audioUrl;
-                final String finalPicUrl = picUrl;
-                SwingUtilities.invokeLater(() -> {
-                    currentLyrics = lrcLines;
-                    updateLyricList(lrcLines);
-                    loadCoverImage(finalPicUrl);
-                    if (centerTabbedPane.getTabCount() > 3) {
-                        centerTabbedPane.setSelectedIndex(3);
-                    }
-
-                    searchStatusLabel.setText("▶️ 正在播放: " + song.getName());
-                    audioPlayer.play(song, finalAudioUrl);
-                });
+                SwingUtilities.invokeLater(() -> audioPlayer.play(song, finalAudioUrl));
             } catch (Exception ex) {
-                LOGGER.log(Level.WARNING, "Failed to resolve song details", ex);
-                SwingUtilities.invokeLater(() -> {
-                    searchStatusLabel.setText("❌ 无法解析曲目播放链接: " + ex.getMessage());
-                });
+                LOGGER.log(Level.WARNING, "Failed to resolve song play URL", ex);
+                SwingUtilities.invokeLater(() -> searchStatusLabel.setText("❌ 无法解析曲目播放链接: " + ex.getMessage()));
             }
         });
+
+        // 2. Fetch album cover asynchronously
+        if (song.getPicUrl() != null && !song.getPicUrl().isBlank()) {
+            loadCoverImage(song.getPicUrl());
+        } else {
+            ASYNC_WORKER.post(() -> {
+                try {
+                    String picUrl = apiClient.fetchPicUrl(song.getId(), song.getSource());
+                    if (!picUrl.isBlank()) {
+                        song.setPicUrl(picUrl);
+                        SwingUtilities.invokeLater(() -> loadCoverImage(picUrl));
+                    }
+                } catch (Exception ex) {
+                    LOGGER.log(Level.FINE, "Failed to fetch album cover URL", ex);
+                }
+            });
+        }
+
+        // 3. Fetch lyric asynchronously (or use cache)
+        String songKey = song.getSource() + ":" + song.getId();
+        if (lyricCache.containsKey(songKey)) {
+            currentLyrics = lyricCache.get(songKey);
+            updateLyricList(currentLyrics);
+        } else {
+            ASYNC_WORKER.post(() -> {
+                try {
+                    String lrc = song.getLyric();
+                    if (lrc == null || lrc.isBlank() || isNumeric(lrc)) {
+                        lrc = apiClient.fetchLyric(song.getId(), song.getSource());
+                        song.setLyric(lrc);
+                    }
+                    List<LrcParser.LrcLine> lrcLines = LrcParser.parse(lrc);
+                    lyricCache.put(songKey, lrcLines);
+                    SwingUtilities.invokeLater(() -> {
+                        if (song.equals(audioPlayer.getCurrentSong())) {
+                            currentLyrics = lrcLines;
+                            updateLyricList(lrcLines);
+                        }
+                    });
+                } catch (Exception ex) {
+                    LOGGER.log(Level.FINE, "Failed to fetch lyric", ex);
+                }
+            });
+        }
     }
 
     private void loadCoverImage(String picUrl) {
@@ -626,20 +664,36 @@ public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerList
             coverLabel.setText("🎵");
             return;
         }
+
+        if (coverCache.containsKey(picUrl)) {
+            coverLabel.setText("");
+            coverLabel.setIcon(coverCache.get(picUrl));
+            return;
+        }
+
         ASYNC_WORKER.post(() -> {
             try {
                 URL url = URI.create(picUrl).toURL();
-                Image img = ImageIO.read(url);
-                if (img != null) {
-                    Image scaled = img.getScaledInstance(42, 42, Image.SCALE_SMOOTH);
-                    ImageIcon icon = new ImageIcon(scaled);
-                    SwingUtilities.invokeLater(() -> {
-                        coverLabel.setText("");
-                        coverLabel.setIcon(icon);
-                    });
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+                conn.setRequestProperty("Referer", "https://music.163.com/");
+                conn.setConnectTimeout(4000);
+                conn.setReadTimeout(5000);
+
+                try (InputStream in = conn.getInputStream()) {
+                    Image img = ImageIO.read(in);
+                    if (img != null) {
+                        Image scaled = img.getScaledInstance(42, 42, Image.SCALE_SMOOTH);
+                        ImageIcon icon = new ImageIcon(scaled);
+                        coverCache.put(picUrl, icon);
+                        SwingUtilities.invokeLater(() -> {
+                            coverLabel.setText("");
+                            coverLabel.setIcon(icon);
+                        });
+                    }
                 }
             } catch (Exception ex) {
-                LOGGER.log(Level.FINE, "Failed to load album cover", ex);
+                LOGGER.log(Level.FINE, "Failed to load album cover image", ex);
             }
         });
     }
@@ -736,17 +790,37 @@ public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerList
 
     @Override
     public void onProgress(long currentMs) {
-        long sec = currentMs / 1000;
+        long sec = Math.max(0, currentMs / 1000);
         timeLabel.setText(String.format("%02d:%02d", sec / 60, sec % 60));
 
-        // Update lyric highlight
+        // Update lyric highlight & center scrolling
         if (currentLyrics != null && !currentLyrics.isEmpty()) {
             int activeIndex = LrcParser.findCurrentLineIndex(currentLyrics, currentMs);
             if (activeIndex >= 0 && activeIndex < lyricListModel.size()) {
-                lyricList.setSelectedIndex(activeIndex);
-                lyricList.ensureIndexIsVisible(activeIndex);
+                if (activeIndex != lastActiveLyricIndex) {
+                    lastActiveLyricIndex = activeIndex;
+                    lyricList.setSelectedIndex(activeIndex);
+                    scrollLyricToCenter(activeIndex);
+                }
             }
         }
+    }
+
+    private void scrollLyricToCenter(int index) {
+        if (index < 0 || index >= lyricListModel.size()) return;
+        Rectangle cellBounds = lyricList.getCellBounds(index, index);
+        if (cellBounds == null) return;
+        JViewport viewport = (JViewport) SwingUtilities.getAncestorOfClass(JViewport.class, lyricList);
+        if (viewport == null) return;
+
+        int viewHeight = viewport.getHeight();
+        if (viewHeight <= 0) return;
+
+        int targetY = cellBounds.y - (viewHeight - cellBounds.height) / 2;
+        int maxY = lyricList.getHeight() - viewHeight;
+        if (maxY < 0) maxY = 0;
+        targetY = Math.max(0, Math.min(targetY, maxY));
+        viewport.setViewPosition(new java.awt.Point(0, targetY));
     }
 
     @Override

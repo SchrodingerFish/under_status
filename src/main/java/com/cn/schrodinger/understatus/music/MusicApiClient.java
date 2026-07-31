@@ -125,10 +125,11 @@ public class MusicApiClient {
                 String name = extractTopLevelJsonField(objJson, "name");
                 String artist = extractNetEaseArtists(objJson);
                 String album = extractNetEaseAlbum(objJson);
+                String picUrl = extractNetEaseAlbumPic(objJson);
                 String url = DIRECT_NETEASE_PLAY_URL + id + ".mp3";
 
                 if (!id.isBlank() && !name.isBlank()) {
-                    MusicSong song = new MusicSong(id, name, artist, album, "netease", url, "", "");
+                    MusicSong song = new MusicSong(id, name, artist, album, "netease", url, picUrl, "");
                     list.add(song);
                 }
             } catch (Exception ex) {
@@ -179,6 +180,14 @@ public class MusicApiClient {
             return picIdOrSongId;
         }
         String sourceParam = (source == null || source.isBlank()) ? "netease" : source.toLowerCase();
+
+        // Direct NetEase album picture detail lookup
+        if ("netease".equals(sourceParam) || isNumeric(picIdOrSongId)) {
+            String directPic = fetchNetEasePicUrl(picIdOrSongId);
+            if (!directPic.isBlank()) {
+                return directPic;
+            }
+        }
 
         try {
             String targetUrl = getApiUrl() + "?types=pic&id=" + URLEncoder.encode(picIdOrSongId, StandardCharsets.UTF_8)
@@ -519,6 +528,32 @@ public class MusicApiClient {
             return "";
         }
         return extractJsonField(json.substring(idx), "name");
+    }
+
+    private String extractNetEaseAlbumPic(String json) {
+        int idx = json.indexOf("\"album\"");
+        if (idx == -1) {
+            return "";
+        }
+        String albumSub = json.substring(idx);
+        return extractJsonField(albumSub, "picUrl");
+    }
+
+    private String fetchNetEasePicUrl(String songId) {
+        try {
+            String targetUrl = "https://music.163.com/api/song/detail/?id=" + songId + "&ids=[" + songId + "]";
+            String json = executeGet(targetUrl);
+            int albumIdx = json.indexOf("\"album\"");
+            if (albumIdx != -1) {
+                String pic = extractJsonField(json.substring(albumIdx), "picUrl");
+                if (pic.startsWith("http")) {
+                    return pic;
+                }
+            }
+        } catch (Exception ex) {
+            LOGGER.log(Level.FINE, "Failed to fetch NetEase album pic", ex);
+        }
+        return "";
     }
 
     private String extractTopLevelJsonField(String json, String fieldName) {

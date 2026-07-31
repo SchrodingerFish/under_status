@@ -12,7 +12,7 @@ import java.util.regex.Pattern;
  */
 public final class LrcParser {
 
-    private static final Pattern TIME_TAG_PATTERN = Pattern.compile("\\[(\\d{2}):(\\d{2})(?:[\\.:](\\d{1,3}))?\\]");
+    private static final Pattern TIME_TAG_PATTERN = Pattern.compile("\\[(\\d{1,3}):(\\d{2})(?:[\\.:](\\d{1,3}))?\\]");
 
     private LrcParser() {
     }

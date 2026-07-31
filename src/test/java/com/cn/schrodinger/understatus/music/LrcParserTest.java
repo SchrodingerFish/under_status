@@ -29,4 +29,16 @@ class LrcParserTest {
         assertEquals(1, LrcParser.findCurrentLineIndex(lines, 15000));
         assertEquals(2, LrcParser.findCurrentLineIndex(lines, 45000));
     }
+
+    @Test
+    void testParseFlexibleMinuteLrc() {
+        String lrc = "[1:05.10]One digit minute\n[102:15.00]Three digit minute";
+        List<LrcParser.LrcLine> lines = LrcParser.parse(lrc);
+
+        assertEquals(2, lines.size());
+        assertEquals(65100, lines.get(0).getTimeMs());
+        assertEquals("One digit minute", lines.get(0).getText());
+        assertEquals(6135000, lines.get(1).getTimeMs());
+        assertEquals("Three digit minute", lines.get(1).getText());
+    }
 }
