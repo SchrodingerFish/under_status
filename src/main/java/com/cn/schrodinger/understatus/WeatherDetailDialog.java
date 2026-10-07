@@ -31,6 +31,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Callable;
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
@@ -54,10 +55,13 @@ public final class WeatherDetailDialog extends JDialog {
     private final RequestProcessor processor = new RequestProcessor("UnderStatus Weather Detail", 3, true);
     private final WeatherDetailStateCoordinator states = new WeatherDetailStateCoordinator();
     private final Map<String, Runnable> loaders = new HashMap<>();
-    private final Map<String, RequestProcessor.Task> tasks = new HashMap<>();
-    private final Map<String, DetailContent> contents = new HashMap<>();
-    private final JButton refresh = new JButton("刷新");
-    private boolean forceRefresh;
+    private final Map<String, Long> requests = new HashMap<>();
+    private final ThreadLocal<java.util.function.Consumer<Runnable>> uiDelivery = new ThreadLocal<>();
+    private final JButton refreshButton = new JButton("刷新");
+    private long requestSequence;
+    private int pendingLoads;
+    private boolean resolving;
+    private boolean disposed;
     private final JLabel heading = new JLabel("天气详情 · 正在定位…");
     private final JLabel status = new JLabel(" ");
     private final JTabbedPane rootTabs = new JTabbedPane();
@@ -102,8 +106,8 @@ public final class WeatherDetailDialog extends JDialog {
         heading.setFont(heading.getFont().deriveFont(Font.BOLD, 16f));
         header.add(heading, BorderLayout.WEST);
         JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
-        refresh.setEnabled(false);
-        refresh.addActionListener(e -> refreshActive());
+        JButton refresh = refreshButton;
+        refresh.addActionListener(e -> refreshActive(refresh));
         JButton close = new JButton("关闭");
         close.addActionListener(e -> dispose());
         actions.add(refresh);
@@ -209,12 +213,10 @@ public final class WeatherDetailDialog extends JDialog {
         controls.add(range);
 
         Runnable action = () -> {
-            int selected = range.getSelectedIndex();
-            WeatherIndexRange selectedRange = selected == 0 ? WeatherIndexRange.ONE_DAY : WeatherIndexRange.THREE_DAYS;
-            String key = "indices-" + selected;
+            String key = "indices-" + range.getSelectedIndex();
             activate(key);
             loaders.put(key, () -> load(key, area,
-                    force -> indicesText(selectedRange, force), false));
+                    () -> indicesText(range.getSelectedIndex() == 0 ? WeatherIndexRange.ONE_DAY : WeatherIndexRange.THREE_DAYS), false));
             loaders.get(key).run();
         };
         loaders.put("indices", action);
@@ -243,14 +245,13 @@ public final class WeatherDetailDialog extends JDialog {
         chartScroll.getHorizontalScrollBar().setUnitIncrement(16);
 
         Runnable action = () -> {
-            int selected = range.getSelectedIndex();
-            String key = "city-daily-" + selected;
+            String key = "city-daily-" + range.getSelectedIndex();
             activate(key);
             ForecastRange[] ranges = new ForecastRange[]{
                 ForecastRange.DAYS_7, ForecastRange.DAYS_3, ForecastRange.DAYS_10,
                 ForecastRange.DAYS_15, ForecastRange.DAYS_30
             };
-            loaders.put(key, () -> load(key, area, force -> cityDailyText(ranges[selected], force), false));
+            loaders.put(key, () -> load(key, area, () -> cityDailyText(ranges[range.getSelectedIndex()]), false));
             loaders.get(key).run();
         };
         loaders.put("city-daily", action);
@@ -286,12 +287,10 @@ public final class WeatherDetailDialog extends JDialog {
         chartScroll.getHorizontalScrollBar().setUnitIncrement(16);
 
         Runnable action = () -> {
-            int selected = range.getSelectedIndex();
-            int hours = new int[]{24, 72, 168}[selected];
-            String key = "city-hourly-" + selected;
+            String key = "city-hourly-" + range.getSelectedIndex();
             activate(key);
             loaders.put(key, () -> load(key, area,
-                    force -> cityHourlyText(hours, force), false));
+                    () -> cityHourlyText(new int[]{24, 72, 168}[range.getSelectedIndex()]), false));
             loaders.get(key).run();
         };
         loaders.put("city-hourly", action);
@@ -320,12 +319,10 @@ public final class WeatherDetailDialog extends JDialog {
         chartScroll.getHorizontalScrollBar().setUnitIncrement(16);
 
         Runnable action = () -> {
-            int selected = range.getSelectedIndex();
-            ForecastRange selectedRange = selected == 0 ? ForecastRange.DAYS_3 : ForecastRange.DAYS_7;
-            String key = "grid-daily-" + selected;
+            String key = "grid-daily-" + range.getSelectedIndex();
             activate(key);
             loaders.put(key, () -> load(key, area,
-                    force -> gridDailyText(selectedRange, force), false));
+                    () -> gridDailyText(range.getSelectedIndex() == 0 ? ForecastRange.DAYS_3 : ForecastRange.DAYS_7), false));
             loaders.get(key).run();
         };
         loaders.put("grid-daily", action);
@@ -361,12 +358,10 @@ public final class WeatherDetailDialog extends JDialog {
         chartScroll.getHorizontalScrollBar().setUnitIncrement(16);
 
         Runnable action = () -> {
-            int selected = range.getSelectedIndex();
-            int hours = selected == 0 ? 24 : 72;
-            String key = "grid-hourly-" + selected;
+            String key = "grid-hourly-" + range.getSelectedIndex();
             activate(key);
             loaders.put(key, () -> load(key, area,
-                    force -> gridHourlyText(hours, force), false));
+                    () -> gridHourlyText(range.getSelectedIndex() == 0 ? 24 : 72), false));
             loaders.get(key).run();
         };
         loaders.put("grid-hourly", action);
@@ -407,13 +402,10 @@ public final class WeatherDetailDialog extends JDialog {
         chartScroll.getHorizontalScrollBar().setUnitIncrement(16);
 
         Runnable action = () -> {
-            if (location == null) return;
-            int selected = range.getSelectedIndex();
-            LocalDate date = LocalDate.now(location.zoneId()).minusDays(selected + 1L);
-            String key = "historical-" + selected;
+            String key = "historical-" + range.getSelectedIndex();
             activate(key);
             loaders.put(key, () -> load(key, area,
-                    force -> historicalText(date, force), false));
+                    () -> historicalText(LocalDate.now(location.zoneId()).minusDays(range.getSelectedIndex() + 1L)), false));
             loaders.get(key).run();
         };
         loaders.put("historical", action);
@@ -426,10 +418,39 @@ public final class WeatherDetailDialog extends JDialog {
         return panel;
     }
 
+    private JPanel simpleTab(String key, Callable<String> loader) {
+        JTextArea area = outputArea();
+        Runnable action = () -> load(key, area, loader, false);
+        loaders.put(key, action);
+        JPanel panel = new JPanel(new BorderLayout());
+        panel.add(new JScrollPane(area));
+        return panel;
+    }
+
+    private JPanel rangedTab(String baseKey, String[] choices, IndexedLoader loader) {
+        JTextArea area = outputArea();
+        JComboBox<String> range = new JComboBox<>(choices);
+        JPanel controls = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        controls.add(new JLabel("范围："));
+        controls.add(range);
+        Runnable action = () -> {
+            String key = baseKey + "-" + range.getSelectedIndex();
+            activate(key);
+            loaders.put(key, () -> load(key, area,
+                    () -> loader.load(range.getSelectedIndex()), false));
+            loaders.get(key).run();
+        };
+        loaders.put(baseKey, action);
+        range.addActionListener(e -> action.run());
+        JPanel panel = new JPanel(new BorderLayout());
+        panel.add(controls, BorderLayout.NORTH);
+        panel.add(new JScrollPane(area), BorderLayout.CENTER);
+        return panel;
+    }
+
     private JTextArea outputArea() {
         JTextArea area = new JTextArea("选择标签后加载数据…");
         area.setEditable(false);
-        area.getAccessibleContext().setAccessibleName("天气图表数据与说明");
         area.setLineWrap(true);
         area.setWrapStyleWord(true);
         area.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 13));
@@ -438,95 +459,83 @@ public final class WeatherDetailDialog extends JDialog {
     }
 
     private void resolveLocation() {
-        WeatherDetailStateCoordinator.Ticket ticket = states.begin("location", "location");
-        tasks.put("location", processor.post(() -> {
+        if (disposed || resolving) return;
+        resolving = true;
+        updateRefreshButton();
+        processor.post(() -> {
             try {
-                Result<LocationContext> resolved = data.resolveResult(config, city, autoIp, false);
+                LocationContext resolved = data.resolve(config, city, autoIp, true);
                 SwingUtilities.invokeLater(() -> {
-                    if (!states.accepts(ticket)) return;
-                    tasks.remove("location");
-                    location = resolved.value();
-                    heading.setText(location.name() + " · 天气详情"
-                            + (resolved.stale() ? " · 定位缓存已过期" : ""));
+                    if (disposed) return;
+                    location = resolved;
+                    resolving = false;
+                    heading.setText(location.name() + " · 天气详情");
                     rootTabs.setEnabled(true);
                     runLoader("city-root");
+                    updateRefreshButton();
                 });
             } catch (Exception ex) {
                 SwingUtilities.invokeLater(() -> {
-                    if (!states.accepts(ticket)) return;
-                    tasks.remove("location");
+                    if (disposed) return;
+                    resolving = false;
                     status.setText(userMessage(ex));
-                    refresh.setEnabled(true);
+                    updateRefreshButton();
                 });
             }
-        }));
+        });
     }
 
-    private void load(String key, JTextArea area, DetailLoader loader, boolean force) {
-        if (states.isClosed() || location == null) return;
-        if (!SwingUtilities.isEventDispatchThread()) {
-            throw new IllegalStateException("Weather selections must be captured on the EDT");
-        }
-        String view = key.replaceFirst("-\\d+$", "");
-        if (states.select(view, key)) {
-            RequestProcessor.Task obsolete = tasks.remove(view);
-            if (obsolete != null) obsolete.cancel();
-        }
-        final boolean requestForce = force || forceRefresh;
-        if (!requestForce && !states.shouldLoad(key)) {
-            DetailContent saved = contents.get(key);
-            if (saved != null && states.state(key) != WeatherDetailStateCoordinator.State.LOADING) {
-                display(area, saved);
-            }
-            if (saved != null || states.state(key) == WeatherDetailStateCoordinator.State.LOADING) {
-                updateStatusIfActive(key);
-                return;
-            }
-        }
-        RequestProcessor.Task previous = tasks.remove(view);
-        if (previous != null) previous.cancel();
-        WeatherDetailStateCoordinator.Ticket ticket = states.begin(view, key);
+    private void load(String key, JTextArea area, Callable<String> loader, boolean force) {
+        if (disposed || location == null || (!force && !states.shouldLoad(key))) return;
+        long request = ++requestSequence;
+        requests.put(key, request);
+        pendingLoads++;
+        updateRefreshButton();
+        states.set(key, WeatherDetailStateCoordinator.State.LOADING,
+                "正在获取和风天气数据…");
         area.setText("正在加载…");
         updateStatusIfActive(key);
-        tasks.put(view, processor.post(() -> {
+        processor.post(() -> {
+            uiDelivery.set(action -> SwingUtilities.invokeLater(() -> {
+                if (!disposed && java.util.Objects.equals(requests.get(key), request)) action.run();
+            }));
             try {
-                DetailContent content = loader.load(requestForce);
+                String text = loader.call();
                 SwingUtilities.invokeLater(() -> {
-                    WeatherDetailStateCoordinator.State state = content.text().isBlank()
+                    if (disposed || !java.util.Objects.equals(requests.get(key), request)) return;
+                    area.setText(text.isBlank() ? "当前地区暂无该数据" : text);
+                    area.setCaretPosition(0);
+                    boolean stale = text.contains("⚠ 数据可能已过期");
+                    WeatherDetailStateCoordinator.State state = text.isBlank()
                             ? WeatherDetailStateCoordinator.State.EMPTY
-                            : content.stale() ? WeatherDetailStateCoordinator.State.STALE
+                            : stale ? WeatherDetailStateCoordinator.State.STALE
                                     : WeatherDetailStateCoordinator.State.READY;
-                    if (!states.complete(ticket, state, content.stale()
-                            ? "⚠ 当前显示过期缓存，请稍后刷新" : "数据来源：QWeather 和风天气")) return;
-                    tasks.remove(view);
-                    contents.put(key, content);
-                    display(area, content);
+                    states.set(key, state, stale ? "⚠ 当前显示过期缓存，请稍后刷新"
+                            : "数据来源：QWeather 和风天气");
                     updateStatusIfActive(key);
-                    if (requestForce && refreshCallback != null) refreshCallback.run();
                 });
             } catch (Exception ex) {
                 SwingUtilities.invokeLater(() -> {
+                    if (disposed || !java.util.Objects.equals(requests.get(key), request)) return;
                     WeatherDetailStateCoordinator.State state = ex instanceof WeatherException weather
                             && weather.kind() == WeatherException.Kind.UNSUPPORTED
                             ? WeatherDetailStateCoordinator.State.UNSUPPORTED
                             : WeatherDetailStateCoordinator.State.ERROR;
-                    if (!states.complete(ticket, state, "加载失败 · 其他标签不受影响")) return;
-                    tasks.remove(view);
+                    states.set(key, state, "加载失败 · 其他标签不受影响");
                     area.setText(userMessage(ex));
                     updateStatusIfActive(key);
                 });
+            } finally {
+                uiDelivery.remove();
+                SwingUtilities.invokeLater(() -> {
+                    pendingLoads--;
+                    updateRefreshButton();
+                });
             }
-        }));
-    }
-
-    private static void display(JTextArea area, DetailContent content) {
-        content.render().run();
-        area.setText(content.text().isBlank() ? "当前地区暂无该数据" : content.text());
-        area.setCaretPosition(0);
+        });
     }
 
     private void runLoader(String key) {
-        if (states.isClosed()) return;
         activate(key);
         Runnable loader = loaders.get(key);
         if (loader != null) loader.run();
@@ -535,12 +544,10 @@ public final class WeatherDetailDialog extends JDialog {
     private void activate(String key) {
         states.activate(key);
         status.setText(states.activeStatus());
-        updateRefreshEnabled();
     }
 
     private void updateStatusIfActive(String key) {
         if (states.isActive(key)) status.setText(states.activeStatus());
-        updateRefreshEnabled();
     }
 
     private void loadRootSelection() {
@@ -556,43 +563,41 @@ public final class WeatherDetailDialog extends JDialog {
         runLoader(key);
     }
 
-    private void updateRefreshEnabled() {
-        refresh.setEnabled(!states.isClosed() && location != null
-                && states.state(states.activeKey()) != WeatherDetailStateCoordinator.State.LOADING);
+    private void refreshActive(JButton button) {
+        if (disposed || resolving || pendingLoads > 0) return;
+        if (location == null) { resolveLocation(); return; }
+        button.setEnabled(false);
+        data.clearLocation(location);
+        String activeKey = states.activeKey();
+        states.clear(activeKey);
+        Runnable loader = loaders.get(activeKey);
+        if (loader != null) loader.run();
+        if (refreshCallback != null) refreshCallback.run();
+        updateRefreshButton();
     }
 
-    private void refreshActive() {
-        if (states.isClosed()) return;
-        if (location == null) {
-            refresh.setEnabled(false);
-            resolveLocation();
-            return;
-        }
-        Runnable loader = loaders.get(states.activeKey());
-        if (loader == null) return;
-        forceRefresh = true;
-        try {
-            loader.run();
-        } finally {
-            forceRefresh = false;
-            updateRefreshEnabled();
-        }
+    private void updateRefreshButton() { refreshButton.setEnabled(!disposed && !resolving && pendingLoads == 0); }
+
+    private void deliverUi(Runnable action) {
+        java.util.function.Consumer<Runnable> delivery = uiDelivery.get();
+        if (delivery == null) throw new IllegalStateException("Weather UI update outside a load request");
+        delivery.accept(action);
     }
 
-    private DetailContent cityNowText(boolean force) throws Exception {
-        Result<WeatherNow> result = data.now(config, location, force);
+    private String cityNowText() throws Exception {
+        Result<WeatherNow> result = data.now(config, location, false);
         WeatherNow w = result.value();
-        Runnable render = () -> cityNowPanel.setCityWeather(w, location.name(), result.stale());
-        return content("实时天气 · " + location.name() + "\n\n温度 " + w.temperatureCelsius() + "°C　体感 "
+        deliverUi(() -> cityNowPanel.setCityWeather(w, location.name(), result.stale()));
+        return "实时天气 · " + location.name() + "\n\n温度 " + w.temperatureCelsius() + "°C　体感 "
                 + w.feelsLikeCelsius() + "°C　" + w.condition() + "\n湿度 "
                 + w.humidityPercent() + "%　风向 " + w.windDirection() + " "
                 + w.windScale() + "级　风速 " + w.windSpeedKph() + " km/h\n气压 "
                 + w.pressureHpa() + " hPa　能见度 " + w.visibilityKm() + " km　降水 "
-                + w.precipitationMm() + " mm\n" + reference(w.reference()) + stale(result), result, render);
+                + w.precipitationMm() + " mm\n" + reference(w.reference()) + stale(result);
     }
 
-    private DetailContent cityDailyText(ForecastRange range, boolean force) throws Exception {
-        Result<List<DailyForecast>> result = data.daily(config, location, range, force);
+    private String cityDailyText(ForecastRange range) throws Exception {
+        Result<List<DailyForecast>> result = data.daily(config, location, range, false);
         List<DailyForecast> values = result.value();
 
         LocalDate today = LocalDate.now(location.zoneId());
@@ -617,14 +622,14 @@ public final class WeatherDetailDialog extends JDialog {
                     .append(d.maximumTemperatureCelsius()).append("°C　降水 ")
                     .append(d.precipitationMm()).append("mm\n");
         }
-        Runnable render = () -> cityDailyChart.setDailyForecasts(chartItems);
+        deliverUi(() -> cityDailyChart.setDailyForecasts(chartItems));
 
         if (!values.isEmpty()) text.append('\n').append(reference(values.get(0).reference()));
-        return content(text.append(stale(result)).toString(), result, render);
+        return text.append(stale(result)).toString();
     }
 
-    private DetailContent cityHourlyText(int hours, boolean force) throws Exception {
-        Result<List<HourlyForecast>> result = data.hourly(config, location, hours, force);
+    private String cityHourlyText(int hours) throws Exception {
+        Result<List<HourlyForecast>> result = data.hourly(config, location, hours, false);
         List<HourlyForecast> values = result.value();
 
         List<QWeatherService.HourlyForecast> chartValues = values.stream()
@@ -642,7 +647,7 @@ public final class WeatherDetailDialog extends JDialog {
                         h.precipitationProbability(),
                         h.time().atZoneSameInstant(location.zoneId()).format(DateTimeFormatter.ofPattern("MM-dd"))
                 )).toList();
-        Runnable render = () -> cityHourlyChart.setForecasts(chartValues);
+        deliverUi(() -> cityHourlyChart.setForecasts(chartValues));
 
         StringBuilder text = new StringBuilder("逐小时天气预报\n\n");
         for (HourlyForecast h : values) text.append(h.time().atZoneSameInstant(location.zoneId())
@@ -652,23 +657,23 @@ public final class WeatherDetailDialog extends JDialog {
                 .append(h.precipitationMm()).append("mm　").append(h.windDirection())
                 .append(h.windScale()).append("级\n");
         if (!values.isEmpty()) text.append('\n').append(reference(values.get(0).reference()));
-        return content(text.append(stale(result)).toString(), result, render);
+        return text.append(stale(result)).toString();
     }
 
-    private DetailContent gridNowText(boolean force) throws Exception {
-        Result<GridWeatherNow> result = data.gridNow(config, location, force);
+    private String gridNowText() throws Exception {
+        Result<GridWeatherNow> result = data.gridNow(config, location, false);
         GridWeatherNow w = result.value();
-        Runnable render = () -> gridNowPanel.setGridWeather(w, location.coordinate(), result.stale());
-        return content("格点实时天气 · 经纬度 " + location.coordinate() + "\n\n温度 "
+        deliverUi(() -> gridNowPanel.setGridWeather(w, location.coordinate(), result.stale()));
+        return "格点实时天气 · 经纬度 " + location.coordinate() + "\n\n温度 "
                 + w.temperatureCelsius() + "°C　" + w.condition() + "\n湿度 "
                 + w.humidityPercent() + "%　风向 " + w.windDirection() + " "
                 + w.windScale() + "级　风速 " + w.windSpeedKph() + " km/h　降水 "
                 + w.precipitationMm() + " mm\n气压 " + w.pressureHpa() + " hPa\n"
-                + reference(w.reference()) + stale(result), result, render);
+                + reference(w.reference()) + stale(result);
     }
 
-    private DetailContent gridDailyText(ForecastRange range, boolean force) throws Exception {
-        Result<List<GridDailyForecast>> result = data.gridDaily(config, location, range, force);
+    private String gridDailyText(ForecastRange range) throws Exception {
+        Result<List<GridDailyForecast>> result = data.gridDaily(config, location, range, false);
         List<GridDailyForecast> values = result.value();
 
         LocalDate today = LocalDate.now(location.zoneId());
@@ -691,14 +696,14 @@ public final class WeatherDetailDialog extends JDialog {
                     .append(d.minimumTemperatureCelsius()).append("~")
                     .append(d.maximumTemperatureCelsius()).append("°C\n");
         }
-        Runnable render = () -> gridDailyChart.setDailyForecasts(chartItems);
+        deliverUi(() -> gridDailyChart.setDailyForecasts(chartItems));
 
         if (!values.isEmpty()) text.append('\n').append(reference(values.get(0).reference()));
-        return content(text.append(stale(result)).toString(), result, render);
+        return text.append(stale(result)).toString();
     }
 
-    private DetailContent gridHourlyText(int hours, boolean force) throws Exception {
-        Result<List<GridHourlyForecast>> result = data.gridHourly(config, location, hours, force);
+    private String gridHourlyText(int hours) throws Exception {
+        Result<List<GridHourlyForecast>> result = data.gridHourly(config, location, hours, false);
         List<GridHourlyForecast> values = result.value();
 
         List<QWeatherService.HourlyForecast> chartValues = values.stream()
@@ -716,7 +721,7 @@ public final class WeatherDetailDialog extends JDialog {
                         null,
                         h.time().atZoneSameInstant(location.zoneId()).format(DateTimeFormatter.ofPattern("MM-dd"))
                 )).toList();
-        Runnable render = () -> gridHourlyChart.setForecasts(chartValues);
+        deliverUi(() -> gridHourlyChart.setForecasts(chartValues));
 
         StringBuilder text = new StringBuilder("格点逐小时预报　坐标 ").append(location.coordinate()).append("\n\n");
         for (GridHourlyForecast h : values) text.append(h.time().atZoneSameInstant(location.zoneId())
@@ -724,13 +729,13 @@ public final class WeatherDetailDialog extends JDialog {
                 .append(h.condition()).append("　").append(h.temperatureCelsius())
                 .append("°C　降水 ").append(h.precipitationMm()).append("mm\n");
         if (!values.isEmpty()) text.append('\n').append(reference(values.get(0).reference()));
-        return content(text.append(stale(result)).toString(), result, render);
+        return text.append(stale(result)).toString();
     }
 
-    private DetailContent airText(boolean force) throws Exception {
-        Result<AirQualitySnapshot> result = data.air(config, location, force);
+    private String airText() throws Exception {
+        Result<AirQualitySnapshot> result = data.air(config, location, false);
         AirQualitySnapshot a = result.value();
-        Runnable render = () -> airQualityPanel.setAirQuality(a);
+        deliverUi(() -> airQualityPanel.setAirQuality(a));
         StringBuilder text = new StringBuilder("实时空气质量\n\nAQI ").append(a.aqi())
                 .append("　").append(a.category()).append("\n主要污染物：")
                 .append(a.primaryPollutant().isBlank() ? "无" : a.primaryPollutant()).append("\n\n");
@@ -738,13 +743,13 @@ public final class WeatherDetailDialog extends JDialog {
         if (!a.attributionTag().isBlank()) {
             text.append("\n许可标识：").append(a.attributionTag()).append('\n');
         }
-        return content(text.append('\n').append(reference(a.reference())).append(stale(result)).toString(), result, render);
+        return text.append('\n').append(reference(a.reference())).append(stale(result)).toString();
     }
 
-    private DetailContent indicesText(WeatherIndexRange range, boolean force) throws Exception {
-        Result<List<WeatherIndex>> result = data.indices(config, location, range, force);
+    private String indicesText(WeatherIndexRange range) throws Exception {
+        Result<List<WeatherIndex>> result = data.indices(config, location, range, false);
         List<WeatherIndex> values = result.value();
-        Runnable render = () -> indicesPanel.setIndices(values);
+        deliverUi(() -> indicesPanel.setIndices(values));
         StringBuilder text = new StringBuilder("全部可用天气生活指数\n\n");
         for (String group : List.of("健康", "出行", "生活")) {
             text.append("【").append(group).append("】\n");
@@ -755,23 +760,23 @@ public final class WeatherDetailDialog extends JDialog {
             }
         }
         if (!values.isEmpty()) text.append(reference(values.get(0).reference()));
-        return content(text.append(stale(result)).toString(), result, render);
+        return text.append(stale(result)).toString();
     }
 
-    private DetailContent minutelyText(boolean force) throws Exception {
-        Result<MinutelyPrecipitation> result = data.minutely(config, location, force);
+    private String minutelyText() throws Exception {
+        Result<MinutelyPrecipitation> result = data.minutely(config, location, false);
         MinutelyPrecipitation m = result.value();
-        Runnable render = () -> precipitationChart.setPoints(m.points());
+        deliverUi(() -> precipitationChart.setPoints(m.points()));
         StringBuilder text = new StringBuilder("分钟级降水（未来2小时，每5分钟）\n\n")
                 .append(m.summary()).append("\n\n");
         for (MinutelyPrecipitation.Point p : m.points()) text.append(p.time().format(
                 DateTimeFormatter.ofPattern("HH:mm"))).append("　").append(p.type())
                 .append("　").append(p.precipitationMm()).append("mm\n");
-        return content(text.append('\n').append(reference(m.reference())).append(stale(result)).toString(), result, render);
+        return text.append('\n').append(reference(m.reference())).append(stale(result)).toString();
     }
 
-    private DetailContent historicalText(LocalDate date, boolean force) throws Exception {
-        Result<HistoricalWeather> result = data.historical(config, location, date, force);
+    private String historicalText(LocalDate date) throws Exception {
+        Result<HistoricalWeather> result = data.historical(config, location, date, false);
         HistoricalWeather h = result.value();
         HistoricalWeather.Daily d = h.daily();
 
@@ -790,7 +795,7 @@ public final class WeatherDetailDialog extends JDialog {
                         null,
                         hour.time().format(DateTimeFormatter.ofPattern("MM-dd"))
                 )).toList();
-        Runnable render = () -> historicalChart.setForecasts(chartValues);
+        deliverUi(() -> historicalChart.setForecasts(chartValues));
 
         StringBuilder text = new StringBuilder("天气时光机　").append(date).append("\n\n")
                 .append("最高/最低温：").append(d.maximumTemperatureCelsius()).append("/")
@@ -802,7 +807,7 @@ public final class WeatherDetailDialog extends JDialog {
                 DateTimeFormatter.ofPattern("HH:mm"))).append("　").append(hour.condition())
                 .append("　").append(hour.temperatureCelsius()).append("°C　降水 ")
                 .append(hour.precipitationMm()).append("mm\n");
-        return content(text.append('\n').append(reference(h.reference())).append(stale(result)).toString(), result, render);
+        return text.append('\n').append(reference(h.reference())).append(stale(result)).toString();
     }
 
     private static String formatWeekday(LocalDate date, LocalDate today) {
@@ -843,10 +848,8 @@ public final class WeatherDetailDialog extends JDialog {
     }
 
     @Override public void dispose() {
-        states.close();
-        tasks.values().forEach(RequestProcessor.Task::cancel);
-        tasks.clear();
-        contents.clear();
+        disposed = true;
+        requests.clear();
         processor.stop();
         super.dispose();
     }
@@ -865,11 +868,5 @@ public final class WeatherDetailDialog extends JDialog {
     }
 
     @FunctionalInterface
-    private interface DetailLoader { DetailContent load(boolean force) throws Exception; }
-
-    private record DetailContent(String text, boolean stale, Runnable render) {}
-
-    private static DetailContent content(String text, Result<?> result, Runnable render) {
-        return new DetailContent(text, result.stale(), render);
-    }
+    private interface IndexedLoader { String load(int index) throws Exception; }
 }

@@ -20,7 +20,7 @@ public class Alarm {
     public String repeatMode; // "ONCE", "DAILY", "WEEKDAYS", "CUSTOM"
     public boolean[] repeatDays = new boolean[7]; // Index 0=Mon, 6=Sun
 
-    // Persisted last occurrence suppresses duplicates after settings reload.
+    // Persisted to prevent duplicate reminders after reloading settings or restarting.
     public LocalDate lastTriggeredDate = null;
 
     public Alarm() {

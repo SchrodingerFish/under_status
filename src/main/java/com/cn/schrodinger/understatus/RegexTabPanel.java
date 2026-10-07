@@ -8,8 +8,7 @@ import java.awt.Font;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
-import com.cn.schrodinger.understatus.toolbox.core.RegexEvaluator;
-import com.cn.schrodinger.understatus.toolbox.core.ToolTask;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
@@ -36,7 +35,6 @@ import javax.swing.text.Highlighter;
  */
 public class RegexTabPanel extends JPanel {
 
-    private final ToolTask tasks = new ToolTask(this);
     private JTextField regexField;
     private JComboBox<PresetItem> presetComboBox;
     private JCheckBox caseInsensitiveCheck;
@@ -77,10 +75,6 @@ public class RegexTabPanel extends JPanel {
         this.regexDebounceTimer.setRepeats(false);
         this.highlightPainter = new DefaultHighlighter.DefaultHighlightPainter(new Color(255, 230, 130));
         initComponents();
-        tasks.watch(regexField);
-        tasks.watch(testTextArea);
-        tasks.watch(replaceField);
-        tasks.onShow(this::runRegex);
     }
 
     private void initComponents() {
@@ -220,11 +214,11 @@ public class RegexTabPanel extends JPanel {
     private DocumentListener createDocListener() {
         return new DocumentListener() {
             @Override
-            public void insertUpdate(DocumentEvent e) { regexDebounceTimer.restart(); }
+            public void insertUpdate(DocumentEvent e) { scheduleRegex(); }
             @Override
-            public void removeUpdate(DocumentEvent e) { regexDebounceTimer.restart(); }
+            public void removeUpdate(DocumentEvent e) { scheduleRegex(); }
             @Override
-            public void changedUpdate(DocumentEvent e) { regexDebounceTimer.restart(); }
+            public void changedUpdate(DocumentEvent e) { scheduleRegex(); }
         };
     }
 
@@ -235,43 +229,55 @@ public class RegexTabPanel extends JPanel {
         runRegex();
     }
 
-    @Override
-    public void removeNotify() {
-        regexDebounceTimer.stop();
-        tasks.cancel();
-        super.removeNotify();
-    }
+    private javax.swing.SwingWorker<com.cn.schrodinger.understatus.toolbox.core.RegexEvaluator.Result, Void> regexWorker;
 
     private void runRegex() {
-        tasks.cancel();
+        if (regexWorker != null) regexWorker.cancel(true);
         testTextArea.getHighlighter().removeAllHighlights();
-        try {
-            String regex = ToolTask.snapshot(regexField);
-            String text = ToolTask.snapshot(testTextArea);
-            String replacement = replaceCheck.isSelected() ? ToolTask.snapshot(replaceField) : null;
-            int flags = (caseInsensitiveCheck.isSelected() ? Pattern.CASE_INSENSITIVE : 0)
-                    | (multilineCheck.isSelected() ? Pattern.MULTILINE : 0);
-            if (regex.isEmpty()) {
-                statusLabel.setText("请输入正则表达式");
-                resultArea.setText("");
-                return;
+        String regex = regexField.getText();
+        String text = testTextArea.getText();
+        if (regex.isEmpty()) {
+            statusLabel.setText("请输入正则表达式");
+            resultArea.setText("");
+            return;
+        }
+        int flags = (caseInsensitiveCheck.isSelected() ? Pattern.CASE_INSENSITIVE : 0)
+                | (multilineCheck.isSelected() ? Pattern.MULTILINE : 0);
+        String replacement = replaceCheck.isSelected() ? replaceField.getText() : null;
+        statusLabel.setText("正在匹配…");
+        regexWorker = new javax.swing.SwingWorker<>() {
+            @Override protected com.cn.schrodinger.understatus.toolbox.core.RegexEvaluator.Result doInBackground() {
+                return com.cn.schrodinger.understatus.toolbox.core.RegexEvaluator.evaluate(regex, text, flags, replacement);
             }
-            statusLabel.setText("计算中… (最多 2 秒，含隔离进程启动)");
-            tasks.submit(() -> RegexEvaluator.evaluate(regex, text, flags, replacement), result -> {
-                for (RegexEvaluator.Span span : result.spans()) {
-                    try { testTextArea.getHighlighter().addHighlight(span.start(), span.end(), highlightPainter); }
-                    catch (javax.swing.text.BadLocationException ex) { throw new IllegalStateException(ex); }
+            @Override protected void done() {
+                if (isCancelled() || regexWorker != this) return;
+                try {
+                    var result = get();
+                    Highlighter highlighter = testTextArea.getHighlighter();
+                    highlighter.removeAllHighlights();
+                    for (var match : result.matches()) highlighter.addHighlight(match.start(), match.end(), highlightPainter);
+                    resultArea.setText(result.output());
+                    statusLabel.setText("匹配: " + result.matches().size() + (result.truncated() ? "（已截断）" : ""));
+                    statusLabel.setForeground(UIManager.getColor("Label.foreground"));
+                } catch (Exception ex) {
+                    Throwable cause = ex.getCause() == null ? ex : ex.getCause();
+                    statusLabel.setText("匹配失败: " + cause.getMessage());
+                    statusLabel.setForeground(Color.RED);
+                    resultArea.setText("");
                 }
-                resultArea.setText(result.output());
-                statusLabel.setText("匹配: " + result.spans().size() + (result.truncated() ? "，已截断" : ""));
-                statusLabel.setForeground(UIManager.getColor("Label.foreground"));
-            }, this::showRegexError);
-        } catch (IllegalArgumentException ex) { showRegexError(ex.getMessage()); }
+            }
+        };
+        regexWorker.execute();
     }
 
-    private void showRegexError(String error) {
-        statusLabel.setText("匹配失败: " + error);
-        statusLabel.setForeground(Color.RED);
-        resultArea.setText("");
+    private void scheduleRegex() {
+        if (regexWorker != null) regexWorker.cancel(true);
+        regexDebounceTimer.restart();
+    }
+
+    @Override public void removeNotify() {
+        regexDebounceTimer.stop();
+        if (regexWorker != null) regexWorker.cancel(true);
+        super.removeNotify();
     }
 }

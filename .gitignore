@@ -7,3 +7,6 @@
 /.fastRequest/
 compile_log.txt
 nbproject/private/
+/keystore
+*.jks
+*.p12

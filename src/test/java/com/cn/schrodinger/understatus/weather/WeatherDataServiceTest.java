@@ -115,6 +115,19 @@ class WeatherDataServiceTest {
                 new LocationResolver(transport), new WeatherCache());
     }
 
+    @Test void changedCredentialsDoNotReuseCachedSuccessAndAuthenticationDoesNotUseFallback() throws Exception {
+        FailingTransport transport = new FailingTransport();
+        WeatherDataService service = service(transport);
+        service.now(config(), location(), false);
+        transport.fail = true;
+        transport.failureKind = WeatherException.Kind.AUTHENTICATION;
+        QWeatherConfig changed = new QWeatherConfig("abc.def.qweatherapi.com", "new-secret", "zh", "m");
+        org.junit.jupiter.api.Assertions.assertThrows(WeatherException.class, () -> service.now(changed, location(), false));
+        org.junit.jupiter.api.Assertions.assertThrows(WeatherException.class, () -> service.now(config(), location(), true));
+        assertFalse(changed.toString().contains("new-secret"));
+        service.clearLocation(null);
+    }
+
     private static QWeatherConfig config() {
         return new QWeatherConfig("abc.def.qweatherapi.com", "secret", "zh", "m");
     }

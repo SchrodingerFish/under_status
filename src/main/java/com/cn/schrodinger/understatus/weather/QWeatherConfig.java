@@ -37,21 +37,15 @@ public record QWeatherConfig(String apiHost, String apiKey, String language, Str
         return !apiHost.isEmpty() && !apiKey.isEmpty();
     }
 
-    /** A non-reversible cache scope; credentials never appear in cache keys or logs. */
     public String cacheIdentity() {
         try {
-            byte[] digest = java.security.MessageDigest.getInstance("SHA-256").digest(
-                    (apiHost.toLowerCase(java.util.Locale.ROOT) + "\n" + apiKey)
-                            .getBytes(StandardCharsets.UTF_8));
-            return java.util.HexFormat.of().formatHex(digest);
-        } catch (java.security.NoSuchAlgorithmException ex) {
-            throw new IllegalStateException("SHA-256 is unavailable", ex);
-        }
+            byte[] bytes = (apiHost + "\n" + apiKey).getBytes(StandardCharsets.UTF_8);
+            return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
+        } catch (java.security.NoSuchAlgorithmException ex) { throw new IllegalStateException(ex); }
     }
 
     @Override public String toString() {
-        return "QWeatherConfig[apiHost=" + apiHost + ", apiKey=<redacted>, language="
-                + language + ", unit=" + unit + "]";
+        return "QWeatherConfig[apiHost=" + apiHost + ", apiKey=<redacted>, language=" + language + ", unit=" + unit + "]";
     }
 
     public URI endpoint(String path, Map<String, String> query) {

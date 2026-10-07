@@ -10,9 +10,6 @@
                 <goal>package</goal>
                 <goal>nbm:nbm</goal>
             </goals>
-            <properties>
-                <keystorepass>123456</keystorepass>
-            </properties>
         </action>
         <action>
             <actionName>run</actionName>

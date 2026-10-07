@@ -5,13 +5,12 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * Line diff with prefix/suffix pruning and a bounded LCS table.
- * Large changed regions fall back to deterministic deletions followed by additions.
+ * Bounded LCS diff. Large changed regions use a valid whole-region replacement
+ * rather than allocating an unbounded quadratic matrix.
+ *
+ * @author peter/antigravity
  */
 public class DiffCalculator {
-    public static final long MAX_DP_CELLS = 1_000_000;
-    public static final int MAX_LINES = 20_000;
-    public record Result(List<DiffLine> lines, boolean coarse) {}
 
     public static class DiffLine {
         public final int type; // 0 = unchanged, 1 = added, -1 = deleted
@@ -24,22 +23,19 @@ public class DiffCalculator {
     }
 
     public static List<DiffLine> calculateDiff(String textA, String textB) {
-        return calculateDetailed(textA, textB).lines();
-    }
-
-    public static Result calculateDetailed(String textA, String textB) {
-        ToolLimits.input(textA);
-        ToolLimits.input(textB);
+        if ((textA != null && textA.length() > 2_000_000) || (textB != null && textB.length() > 2_000_000)) {
+            throw new IllegalArgumentException("每份文本最多支持 200 万字符，请拆分后对比");
+        }
+        if (tooManyLines(textA) || tooManyLines(textB)) throw new IllegalArgumentException("每份文本最多支持 5 万行，请拆分后对比");
         String[] linesA = (textA == null || textA.isEmpty()) ? new String[0] : textA.split("\\r?\\n", -1);
         String[] linesB = (textB == null || textB.isEmpty()) ? new String[0] : textB.split("\\r?\\n", -1);
 
         int n = linesA.length;
         int m = linesB.length;
-        if (n > MAX_LINES || m > MAX_LINES) throw new IllegalArgumentException("差异比较每侧最多 20,000 行");
 
         // 1. Fast path: Both empty
         if (n == 0 && m == 0) {
-            return new Result(List.of(), false);
+            return Collections.emptyList();
         }
 
         List<DiffLine> result = new ArrayList<>();
@@ -66,15 +62,18 @@ public class DiffCalculator {
         int subLenA = endA - start + 1;
         int subLenB = endB - start + 1;
 
-        boolean coarse = (long) (subLenA + 1) * (subLenB + 1) > MAX_DP_CELLS;
-        if (coarse) {
+        if ((long) (subLenA + 1) * (subLenB + 1) > 4_000_000) {
             for (int k = start; k <= endA; k++) result.add(new DiffLine(-1, "- " + linesA[k]));
             for (int k = start; k <= endB; k++) result.add(new DiffLine(1, "+ " + linesB[k]));
-        } else if (subLenA > 0 && subLenB > 0) {
+            result.addAll(suffix);
+            return result;
+        }
+
+        if (subLenA > 0 && subLenB > 0) {
             // Compute LCS on middle slice only
             int[][] dp = new int[subLenA + 1][subLenB + 1];
             for (int i = 1; i <= subLenA; i++) {
-                ToolLimits.checkInterrupted();
+                if (Thread.currentThread().isInterrupted()) throw new java.util.concurrent.CancellationException();
                 String lineA = linesA[start + i - 1];
                 for (int j = 1; j <= subLenB; j++) {
                     if (lineA.equals(linesB[start + j - 1])) {
@@ -118,6 +117,13 @@ public class DiffCalculator {
         // 5. Append suffix
         result.addAll(suffix);
 
-        return new Result(List.copyOf(result), coarse);
+        return result;
+    }
+
+    private static boolean tooManyLines(String text) {
+        if (text == null) return false;
+        int lines = 1;
+        for (int i = 0; i < text.length(); i++) if (text.charAt(i) == '\n' && ++lines > 50_000) return true;
+        return false;
     }
 }

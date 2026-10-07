@@ -102,40 +102,16 @@ public class BottomToolbarView extends JPanel {
     private String cachedWeatherText = "";
     private boolean isFetchingWeather = false;
     private Timer updateTimer;
-    private RequestProcessor weatherProcessor;
-    private LatestTask<String> weatherTask;
-    private final SettingsRepository settingsRepository;
-    private final StatusBarController controller = new StatusBarController(this);
+    private RequestProcessor weatherProcessor = new RequestProcessor("UnderStatus Weather", 1, true);
+    private LatestTask<String> weatherTask = new LatestTask<>(weatherProcessor);
+    private boolean resourcesStopped;
     private final EditorMetricsTracker metricsTracker = new EditorMetricsTracker(this::applyEditorMetrics);
 
     public BottomToolbarView() {
-        this(SettingsRepository.getDefault());
-    }
-
-    BottomToolbarView(SettingsRepository repository) {
-        this.settingsRepository = java.util.Objects.requireNonNull(repository);
         initComponents();
         loadSettings();
-    }
-
-    void startUpdates() {
-        weatherProcessor = new RequestProcessor("UnderStatus Weather", 1, true);
-        weatherTask = new LatestTask<>(weatherProcessor);
-        isFetchingWeather = false;
-        lastWeatherUpdate = 0;
         startTimer();
         metricsTracker.start();
-        refreshWeather(false);
-    }
-
-    void stopUpdates() {
-        if (updateTimer != null) updateTimer.stop();
-        if (weatherTask != null) weatherTask.close();
-        if (weatherProcessor != null) weatherProcessor.stop();
-        weatherTask = null;
-        weatherProcessor = null;
-        isFetchingWeather = false;
-        metricsTracker.close();
     }
 
     private void initComponents() {
@@ -214,8 +190,16 @@ public class BottomToolbarView extends JPanel {
             @Override
             public void mouseClicked(MouseEvent e) {
                 if (SwingUtilities.isLeftMouseButton(e)) {
+                    long beforeUsed = (Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()) / (1024 * 1024);
+                    System.gc();
                     updateMemoryInfo();
-                    StatusDisplayer.getDefault().setStatusText("内存统计已刷新");
+                    long afterUsed = (Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()) / (1024 * 1024);
+                    long freed = beforeUsed - afterUsed;
+                    if (freed > 0) {
+                        StatusDisplayer.getDefault().setStatusText(String.format("JVM 垃圾回收完成，已释放 %d MB 堆内存", freed));
+                    } else {
+                        StatusDisplayer.getDefault().setStatusText("JVM 垃圾回收已触发 (JVM GC Triggered)");
+                    }
                 }
             }
         });
@@ -253,9 +237,9 @@ public class BottomToolbarView extends JPanel {
 
         // 7. Toolbox button (Highly Prominent Highlight)
         noteButton = new JButton("🧰 工具宝库");
-        UiDefaults.describe(noteButton, "工具箱", "开启草稿便笺、计算器、取色器、编解码、时间戳等工具箱");
+        noteButton.setToolTipText("开启草稿便笺、计算器、取色器、编解码、时间戳等工具箱");
         noteButton.setFont(UIManager.getFont("Button.font").deriveFont(11f).deriveFont(java.awt.Font.BOLD));
-        noteButton.setFocusPainted(true);
+        noteButton.setFocusPainted(false);
         noteButton.setContentAreaFilled(true);
         noteButton.setBackground(new Color(0, 120, 215, 35)); // Accent blue tint
         noteButton.setForeground(UIManager.getColor("Button.foreground"));
@@ -301,7 +285,7 @@ public class BottomToolbarView extends JPanel {
         btn.setFont(UIManager.getFont("Button.font").deriveFont(11f));
         btn.setBorderPainted(false);
         btn.setContentAreaFilled(false);
-        btn.setFocusPainted(true);
+        btn.setFocusPainted(false);
         btn.setMargin(new Insets(2, 6, 2, 6));
         btn.setBorder(BorderFactory.createEmptyBorder(1, 4, 1, 4));
 
@@ -353,7 +337,9 @@ public class BottomToolbarView extends JPanel {
                 updateReadOnlyState();
             }
             // 5. Refresh editor metrics (covers focus changes the registry may miss)
-            // Editor metrics are pushed by document/focus events.
+            if (showMetrics) {
+                metricsTracker.refreshNow();
+            }
             // 6. Check Alarms
             checkAlarms(now);
 
@@ -364,15 +350,16 @@ public class BottomToolbarView extends JPanel {
     }
 
     private void refreshWeather(boolean force) {
-        if (!showWeather || weatherTask == null) {
+        if (resourcesStopped || !showWeather) {
             return;
         }
         if (qweatherApiHost.isBlank() || qweatherApiKey.isBlank()) {
             cachedWeatherText = "";
+            boolean changed = !"🌤 天气：待配置".equals(weatherLabel.getText());
             weatherLabel.setText("🌤 天气：待配置");
             weatherLabel.setToolTipText("点击配置和风天气 API Host 和 API Key");
             isFetchingWeather = false;
-            rebuildToolbarLayout();
+            if (changed) rebuildToolbarLayout();
             return;
         }
 
@@ -417,15 +404,26 @@ public class BottomToolbarView extends JPanel {
     }
 
     @Override
-    public void addNotify() {
-        super.addNotify();
-        controller.start();
+    public void removeNotify() {
+        resourcesStopped = true;
+        if (updateTimer != null) updateTimer.stop();
+        weatherTask.close();
+        weatherProcessor.stop();
+        metricsTracker.close();
+        super.removeNotify();
     }
 
-    @Override
-    public void removeNotify() {
-        controller.close();
-        super.removeNotify();
+    @Override public void addNotify() {
+        super.addNotify();
+        if (resourcesStopped) {
+            weatherProcessor = new RequestProcessor("UnderStatus Weather", 1, true);
+            weatherTask = new LatestTask<>(weatherProcessor);
+            resourcesStopped = false;
+            isFetchingWeather = false;
+            lastWeatherUpdate = 0;
+            updateTimer.start();
+            metricsTracker.start();
+        }
     }
 
     private void updateMemoryInfo() {
@@ -444,8 +442,8 @@ public class BottomToolbarView extends JPanel {
 
         JMenuItem skipItem = new JMenuItem("⏭ 跳过当前阶段 (" + ("WORK".equals(pomodoroEngine.getState()) ? "进入休息" : "进入专注") + ")");
         skipItem.addActionListener(ev -> {
-            pomodoroEngine.skip();
-            updatePomodoroText();
+            pomodoroEngine.setTimeLeft(1);
+            tickPomodoro();
         });
         menu.add(skipItem);
 
@@ -512,7 +510,7 @@ public class BottomToolbarView extends JPanel {
             }
             setText(String.format("📊 %dM/%dM", usedM, totalM));
             setToolTipText(String.format(
-                    "<html><b>JVM 堆内存监控</b><br>已使用: %d MB (%d%%)<br>已提交: %d MB<br>最大可用: %d MB<br><i>点击刷新统计</i></html>",
+                    "<html><b>JVM 堆内存监控</b><br>已使用: %d MB (%d%%)<br>已提交: %d MB<br>最大可用: %d MB<br><i>点击触发垃圾回收 (GC)</i></html>",
                     usedM, percent, totalM, maxM));
             repaint();
         }
@@ -634,6 +632,7 @@ public class BottomToolbarView extends JPanel {
     }
 
     public void loadSettings() {
+        SettingsRepository settingsRepository = SettingsRepository.getDefault();
         UnderStatusSettings settings = settingsRepository.load();
 
         // 1. Clock Format
@@ -652,9 +651,13 @@ public class BottomToolbarView extends JPanel {
         updatePomodoroText();
 
         // 3. Alarms
-        String serializedAlarms = settingsRepository.loadAlarms();
-        alarms.clear();
-        alarms.addAll(Alarm.deserializeList(serializedAlarms));
+        try {
+            String serializedAlarms = settingsRepository.loadAlarms();
+            alarms.clear();
+            alarms.addAll(Alarm.deserializeList(serializedAlarms));
+        } catch (RuntimeException ex) {
+            org.openide.awt.StatusDisplayer.getDefault().setStatusText("闹钟读取失败，保留当前状态: " + ex.getMessage());
+        }
         updateAlarmButtonText();
 
         // 4. Component Visibilities
@@ -688,8 +691,12 @@ public class BottomToolbarView extends JPanel {
                 || !java.util.Objects.equals(previousCity, qweatherCity)
                 || previousAutoIp != qweatherAutoIp) {
             QWeatherService.clearCache();
+            weatherTask.invalidate();
+            isFetchingWeather = false;
         }
         if (!weatherState.visible()) {
+            weatherTask.invalidate();
+            isFetchingWeather = false;
             lastWeatherUpdate = 0;
             cachedWeatherText = "";
             weatherLabel.setText("");
@@ -805,7 +812,10 @@ public class BottomToolbarView extends JPanel {
     }
 
     private void saveAlarmsToPreferences() {
-        settingsRepository.saveAlarms(Alarm.serializeList(alarms));
+        try { SettingsRepository.getDefault().saveAlarms(Alarm.serializeList(alarms)); }
+        catch (RuntimeException ex) {
+            org.openide.awt.StatusDisplayer.getDefault().setStatusText("闹钟保存失败: " + ex.getMessage());
+        }
         updateAlarmButtonText();
     }
 
@@ -836,28 +846,22 @@ public class BottomToolbarView extends JPanel {
             return;
         }
 
-        formatButton.setEnabled(false);
         Runnable reformatTask = () -> {
             reformat.lock();
             try {
-                Runnable atomicFormatting = () -> {
-                    try {
-                        reformat.reformat(0, doc.getLength());
-                    } catch (javax.swing.text.BadLocationException ex) {
-                        throw new IllegalStateException(ex);
-                    }
-                };
-                if (doc instanceof StyledDocument styled) NbDocument.runAtomic(styled, atomicFormatting);
-                else atomicFormatting.run();
+                reformat.reformat(0, doc.getLength());
                 StatusDisplayer.getDefault().setStatusText("代码格式化完成");
             } catch (Exception ex) {
                 StatusDisplayer.getDefault().setStatusText("格式化失败: " + ex.getMessage());
             } finally {
                 reformat.unlock();
-                SwingUtilities.invokeLater(() -> formatButton.setEnabled(true));
             }
         };
 
-        RequestProcessor.getDefault().post(reformatTask);
+        if (doc instanceof StyledDocument) {
+            NbDocument.runAtomic((StyledDocument) doc, reformatTask);
+        } else {
+            SwingUtilities.invokeLater(reformatTask);
+        }
     }
 }

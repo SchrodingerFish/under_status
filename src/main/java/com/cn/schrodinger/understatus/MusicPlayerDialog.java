@@ -49,4 +49,9 @@ public class MusicPlayerDialog extends JDialog {
     public MusicTabPanel getMusicPanel() {
         return musicPanel;
     }
+
+    @Override public void dispose() {
+        if (musicPanel != null) musicPanel.close();
+        super.dispose();
+    }
 }

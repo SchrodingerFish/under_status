@@ -1,155 +1,601 @@
 package com.cn.schrodinger.understatus.music;
 
-import com.cn.schrodinger.understatus.core.JsonSupport;
 import com.cn.schrodinger.understatus.settings.SettingsRepository;
-import com.fasterxml.jackson.databind.JsonNode;
-import java.io.IOException;
+
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
 import java.net.URI;
+import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
-import java.util.Objects;
-import java.util.function.Supplier;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
-/** Bounded music API client. Provider fallback never changes the requested source. */
+/**
+ * Client for fetching music search results, audio stream URLs, album covers, and lyrics.
+ * Supports GDStudio API with automatic fallback to direct NetEase Cloud Music API to bypass Cloudflare 403 blocks.
+ */
 public class MusicApiClient {
+
+    private static final Logger LOGGER = Logger.getLogger(MusicApiClient.class.getName());
+
     public static final String DEFAULT_API_URL = "https://music-api.gdstudio.xyz/api.php";
-    private static final String NETEASE = "https://music.163.com";
+    private static final String DIRECT_NETEASE_SEARCH_URL = "https://music.163.com/api/search/get/web";
+    private static final String DIRECT_NETEASE_LYRIC_URL = "https://music.163.com/api/song/lyric";
+    private static final String DIRECT_NETEASE_PLAY_URL = "https://music.163.com/song/media/outer/url?id=";
 
-    @FunctionalInterface
-    public interface Transport {
-        String get(URI uri) throws Exception;
-    }
-
-    private final Transport transport;
-    private final Supplier<String> host;
+    private static final String USER_AGENT =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            + "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+    private static final int TIMEOUT_MS = 4000;
 
     public MusicApiClient() {
-        this(uri -> new String(MusicHttp.get(uri, JsonSupport.MAX_INPUT_LENGTH), StandardCharsets.UTF_8),
-                () -> SettingsRepository.getDefault().loadMusicApiHost());
     }
 
-    public MusicApiClient(Transport transport, Supplier<String> host) {
-        this.transport = Objects.requireNonNull(transport);
-        this.host = Objects.requireNonNull(host);
+    private String getApiUrl() {
+        String configured = SettingsRepository.getDefault().load().musicApiHost();
+        if (configured != null && !configured.isBlank()) {
+            return configured.trim();
+        }
+        return DEFAULT_API_URL;
     }
 
+    /**
+     * Search songs by keyword and source.
+     */
     public List<MusicSong> search(String keyword, String source, int count) throws Exception {
-        if (keyword == null || keyword.isBlank()) return List.of();
-        String provider = source(source);
-        int limit = Math.max(1, Math.min(50, count));
+        if (keyword == null || keyword.isBlank()) {
+            return new ArrayList<>();
+        }
+        String sourceParam = (source == null || source.isBlank()) ? "netease" : source.toLowerCase();
+
+        // Strategy 1: Try configured / GDStudio API
         try {
-            JsonNode root = get(api("types=search&name=" + encode(keyword.trim())
-                    + "&source=" + encode(provider) + "&count=" + limit));
-            if (!root.isArray()) throw new IOException("音乐搜索响应不是数组");
-            return parseSongs(root, provider, false, limit);
-        } catch (Exception primary) {
-            if (!"netease".equals(provider) || Thread.currentThread().isInterrupted()) throw primary;
-            try {
-                JsonNode root = get(URI.create(NETEASE + "/api/search/get/web?s=" + encode(keyword.trim())
-                        + "&type=1&offset=0&total=true&limit=" + limit));
-                JsonNode songs = root.path("result").path("songs");
-                if (songs.isMissingNode() && root.path("result").path("songCount").asInt(-1) == 0) return List.of();
-                if (!songs.isArray()) throw new IOException("网易云搜索响应无效");
-                return parseSongs(songs, provider, true, limit);
-            } catch (Exception fallback) {
-                fallback.addSuppressed(primary);
-                throw fallback;
+            String encodedKw = URLEncoder.encode(keyword.trim(), StandardCharsets.UTF_8);
+            String targetUrl = getApiUrl() + "?types=search&name=" + encodedKw + "&source=" + sourceParam
+                    + "&count=" + Math.max(1, Math.min(50, count));
+
+            String json = executeGet(targetUrl);
+            if (json.startsWith("[") && json.contains("id")) {
+                List<MusicSong> list = parseSearchResult(json, sourceParam);
+                if (!list.isEmpty()) {
+                    return list;
+                }
+            }
+        } catch (Exception ex) {
+            LOGGER.log(Level.INFO, "GDStudio API search failed, falling back to direct NetEase API: {0}", ex.getMessage());
+        }
+
+        // Strategy 2: Fallback to direct NetEase Cloud Music API
+        return searchDirectNetEase(keyword, count);
+    }
+
+    /**
+     * Direct NetEase Cloud Music search API fallback.
+     */
+    private List<MusicSong> searchDirectNetEase(String keyword, int count) throws Exception {
+        String encodedKw = URLEncoder.encode(keyword.trim(), StandardCharsets.UTF_8);
+        String targetUrl = DIRECT_NETEASE_SEARCH_URL + "?csrf_token=&hlpretag=&hlposttag=&s="
+                + encodedKw + "&type=1&offset=0&total=true&limit=" + Math.max(1, Math.min(50, count));
+
+        String json = executeGet(targetUrl);
+        List<MusicSong> list = new ArrayList<>();
+
+        if (json == null || json.isBlank() || !json.contains("\"songs\"")) {
+            return list;
+        }
+
+        int songsIdx = json.indexOf("\"songs\"");
+        if (songsIdx == -1) {
+            return list;
+        }
+        int arrStart = json.indexOf('[', songsIdx);
+        if (arrStart == -1) {
+            return list;
+        }
+
+        int depth = 0;
+        int arrEnd = -1;
+        for (int i = arrStart; i < json.length(); i++) {
+            char c = json.charAt(i);
+            if (c == '[') depth++;
+            else if (c == ']') {
+                depth--;
+                if (depth == 0) {
+                    arrEnd = i;
+                    break;
+                }
             }
         }
-    }
 
-    private List<MusicSong> parseSongs(JsonNode array, String provider, boolean direct, int limit) {
-        List<MusicSong> songs = new ArrayList<>();
-        for (JsonNode item : array) {
-            String id = item.path("id").asText("");
-            String name = item.path("name").asText("");
-            if (id.isBlank() || name.isBlank()) continue;
-            JsonNode album = item.path("album");
-            String artist = artists(item.path(direct ? "artists" : "artist"));
-            songs.add(new MusicSong(id, name, artist,
-                    album.isObject() ? album.path("name").asText("") : album.asText(""), provider,
-                    direct ? directAudio(id) : item.path("url").asText(""),
-                    direct ? album.path("picUrl").asText("") : item.path("pic_id").asText(""),
-                    item.path("lyric_id").asText("")));
-            if (songs.size() >= limit) break;
+        if (arrEnd == -1) {
+            return list;
         }
-        return songs;
+
+        String songsArrayJson = json.substring(arrStart, arrEnd + 1);
+        List<String> objects = splitJsonObjectsInArray(songsArrayJson);
+
+        for (String objJson : objects) {
+            try {
+                String id = extractTopLevelJsonField(objJson, "id");
+                String name = extractTopLevelJsonField(objJson, "name");
+                String artist = extractNetEaseArtists(objJson);
+                String album = extractNetEaseAlbum(objJson);
+                String picUrl = extractNetEaseAlbumPic(objJson);
+                String url = DIRECT_NETEASE_PLAY_URL + id + ".mp3";
+
+                if (!id.isBlank() && !name.isBlank()) {
+                    MusicSong song = new MusicSong(id, name, artist, album, "netease", url, picUrl, "");
+                    list.add(song);
+                }
+            } catch (Exception ex) {
+                LOGGER.log(Level.FINE, "Failed to parse NetEase song item", ex);
+            }
+        }
+        return list;
     }
 
-    private String artists(JsonNode value) {
-        if (!value.isArray()) return value.asText("");
+    /**
+     * Resolve direct audio playback URL for a song.
+     */
+    public String fetchSongUrl(String songId, String source) throws Exception {
+        if (songId == null || songId.isBlank()) {
+            return "";
+        }
+        String sourceParam = (source == null || source.isBlank()) ? "netease" : source.toLowerCase();
+
+        // Instant direct NetEase audio stream URL (Zero network delay)
+        if ("netease".equals(sourceParam) || isNumeric(songId)) {
+            return DIRECT_NETEASE_PLAY_URL + songId + ".mp3";
+        }
+
+        // Try GDStudio API for non-NetEase sources
+        try {
+            String targetUrl = getApiUrl() + "?types=url&id=" + URLEncoder.encode(songId, StandardCharsets.UTF_8)
+                    + "&source=" + sourceParam + "&br=320";
+            String json = executeGet(targetUrl);
+            String url = parseSingleUrlField(json, "url");
+            if (url.startsWith("http")) {
+                return url;
+            }
+        } catch (Exception ex) {
+            LOGGER.log(Level.FINE, "GDStudio fetchSongUrl failed", ex);
+        }
+
+        return "";
+    }
+
+    /**
+     * Resolve album picture cover URL for a song.
+     */
+    public String fetchPicUrl(String picIdOrSongId, String source) throws Exception {
+        if (picIdOrSongId == null || picIdOrSongId.isBlank()) {
+            return "";
+        }
+        if (picIdOrSongId.startsWith("http")) {
+            return picIdOrSongId;
+        }
+        String sourceParam = (source == null || source.isBlank()) ? "netease" : source.toLowerCase();
+
+        // Direct NetEase album picture detail lookup
+        if ("netease".equals(sourceParam) || isNumeric(picIdOrSongId)) {
+            String directPic = fetchNetEasePicUrl(picIdOrSongId);
+            if (!directPic.isBlank()) {
+                return directPic;
+            }
+        }
+
+        try {
+            String targetUrl = getApiUrl() + "?types=pic&id=" + URLEncoder.encode(picIdOrSongId, StandardCharsets.UTF_8)
+                    + "&source=" + sourceParam;
+            String json = executeGet(targetUrl);
+            return parseSingleUrlField(json, "url");
+        } catch (Exception ex) {
+            LOGGER.log(Level.FINE, "GDStudio fetchPicUrl failed", ex);
+            return "";
+        }
+    }
+
+    /**
+     * Resolve LRC lyrics content for a song.
+     */
+    public String fetchLyric(String lyricIdOrSongId, String source) throws Exception {
+        if (lyricIdOrSongId == null || lyricIdOrSongId.isBlank()) {
+            return "";
+        }
+        String sourceParam = (source == null || source.isBlank()) ? "netease" : source.toLowerCase();
+
+        // Fast path: Direct NetEase Lyric API
+        if ("netease".equals(sourceParam) || isNumeric(lyricIdOrSongId)) {
+            try {
+                String targetUrl = DIRECT_NETEASE_LYRIC_URL + "?id=" + URLEncoder.encode(lyricIdOrSongId, StandardCharsets.UTF_8)
+                        + "&lv=1&kv=1&tv=-1";
+                String json = executeGet(targetUrl);
+                String parsed = extractNestedLyricField(json);
+                if (!parsed.isBlank()) {
+                    return parsed;
+                }
+            } catch (Exception ex) {
+                LOGGER.log(Level.FINE, "Direct NetEase fetchLyric failed, trying GDStudio API", ex);
+            }
+        }
+
+        // Try GDStudio / Meting API
+        try {
+            String targetUrl = getApiUrl() + "?types=lrc&id=" + URLEncoder.encode(lyricIdOrSongId, StandardCharsets.UTF_8)
+                    + "&source=" + sourceParam;
+            String response = executeGet(targetUrl);
+            String parsed = extractNestedLyricField(response);
+            if (!parsed.isBlank()) {
+                return parsed;
+            }
+        } catch (Exception ex) {
+            LOGGER.log(Level.FINE, "GDStudio fetchLyric failed", ex);
+        }
+
+        return "";
+    }
+
+    private String executeGet(String urlStr) throws Exception {
+        String currentUrl = urlStr;
+        for (int attempt = 0; attempt < 5; attempt++) {
+            URL url = URI.create(currentUrl).toURL();
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(TIMEOUT_MS);
+            conn.setReadTimeout(TIMEOUT_MS);
+            conn.setRequestProperty("User-Agent", USER_AGENT);
+            conn.setRequestProperty("Accept", "application/json, text/plain, */*");
+            conn.setRequestProperty("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8");
+            String referer = currentUrl.contains("music.163.com") ? "https://music.163.com/" : getApiUrl();
+            conn.setRequestProperty("Referer", referer);
+            conn.setInstanceFollowRedirects(false);
+
+            try {
+            int code = conn.getResponseCode();
+            if (code == HttpURLConnection.HTTP_MOVED_PERM || code == HttpURLConnection.HTTP_MOVED_TEMP
+                    || code == 307 || code == 308) {
+                String redirectUrl = conn.getHeaderField("Location");
+                if (redirectUrl != null && !redirectUrl.isBlank()) {
+                    currentUrl = URI.create(currentUrl).resolve(redirectUrl).toString();
+                    continue;
+                }
+            }
+
+            if (code >= 400) {
+                InputStream err = conn.getErrorStream();
+                String msg = err != null ? readStream(err) : "HTTP " + code;
+                throw new Exception("Music API error (" + code + "): " + msg);
+            }
+
+            try (InputStream in = conn.getInputStream()) {
+                return readStream(in);
+            }
+            } finally { conn.disconnect(); }
+        }
+        throw new Exception("Too many redirects for " + urlStr);
+    }
+
+    private String readStream(InputStream in) throws Exception {
+        try (in) {
+            return new String(com.cn.schrodinger.understatus.BoundedInput.read(in, 2 * 1024 * 1024), StandardCharsets.UTF_8).trim();
+        }
+    }
+
+    private List<MusicSong> parseSearchResult(String json, String defaultSource) {
+        List<MusicSong> list = new ArrayList<>();
+        if (json == null || json.isBlank() || !json.startsWith("[")) {
+            return list;
+        }
+
+        List<String> objects = splitJsonObjectsInArray(json);
+        for (String objJson : objects) {
+            try {
+                String id = extractJsonField(objJson, "id");
+                String name = extractJsonField(objJson, "name");
+                String artist = extractArtistField(objJson);
+                String album = extractJsonField(objJson, "album");
+                String lyricId = extractJsonField(objJson, "lyric_id");
+                if (lyricId.isBlank()) {
+                    lyricId = id;
+                }
+
+                String url = extractJsonField(objJson, "url");
+                String picUrl = extractJsonField(objJson, "pic");
+
+                String songSource = extractJsonField(objJson, "source");
+                if (songSource.isBlank()) {
+                    songSource = defaultSource;
+                }
+
+                if (!id.isBlank() || !name.isBlank()) {
+                    MusicSong song = new MusicSong(id, name, artist, album, songSource, url, picUrl, "");
+                    list.add(song);
+                }
+            } catch (Exception ex) {
+                LOGGER.log(Level.FINE, "Could not parse song item JSON", ex);
+            }
+        }
+        return list;
+    }
+
+    private String parseSingleUrlField(String json, String fieldName) {
+        if (json == null || json.isBlank()) {
+            return "";
+        }
+        if (!json.startsWith("{")) {
+            return json.trim();
+        }
+        return extractJsonField(json, fieldName);
+    }
+
+    String fetchLyricFromJsonForTest(String json) {
+        return extractNestedLyricField(json);
+    }
+
+    private String extractNestedLyricField(String json) {
+        if (json == null || json.isBlank()) {
+            return "";
+        }
+        String trimmed = json.trim();
+        if (trimmed.startsWith("[")) {
+            return trimmed;
+        }
+
+        int lrcIdx = trimmed.indexOf("\"lrc\":");
+        if (lrcIdx == -1) {
+            lrcIdx = trimmed.indexOf("\"lrc\" :");
+        }
+        if (lrcIdx != -1) {
+            String val = extractJsonField(trimmed.substring(lrcIdx), "lyric");
+            if (!val.isBlank()) {
+                return val;
+            }
+        }
+
+        if (trimmed.contains("\"lyric\"")) {
+            return extractJsonField(trimmed, "lyric");
+        }
+
+        return "";
+    }
+
+    private List<String> splitJsonObjectsInArray(String json) {
+        List<String> list = new ArrayList<>();
+        int depth = 0;
+        int start = -1;
+        boolean inString = false;
+        boolean escape = false;
+
+        for (int i = 0; i < json.length(); i++) {
+            char c = json.charAt(i);
+            if (escape) {
+                escape = false;
+                continue;
+            }
+            if (c == '\\' && inString) {
+                escape = true;
+                continue;
+            }
+            if (c == '"') {
+                inString = !inString;
+                continue;
+            }
+            if (inString) {
+                continue;
+            }
+
+            if (c == '{') {
+                if (depth == 0) {
+                    start = i;
+                }
+                depth++;
+            } else if (c == '}') {
+                depth--;
+                if (depth == 0 && start != -1) {
+                    list.add(json.substring(start, i + 1));
+                    start = -1;
+                }
+            }
+        }
+        return list;
+    }
+
+    private String extractJsonField(String json, String fieldName) {
+        String pattern = "\"" + fieldName + "\"";
+        int idx = json.indexOf(pattern);
+        if (idx == -1) {
+            return "";
+        }
+        int colonIdx = json.indexOf(':', idx + pattern.length());
+        if (colonIdx == -1) {
+            return "";
+        }
+        int startVal = colonIdx + 1;
+        while (startVal < json.length() && Character.isWhitespace(json.charAt(startVal))) {
+            startVal++;
+        }
+        if (startVal >= json.length()) {
+            return "";
+        }
+
+        if (json.charAt(startVal) == '"') {
+            StringBuilder sb = new StringBuilder();
+            boolean escape = false;
+            for (int i = startVal + 1; i < json.length(); i++) {
+                char c = json.charAt(i);
+                if (escape) {
+                    if (c == 'n') sb.append('\n');
+                    else if (c == 't') sb.append('\t');
+                    else if (c == 'r') sb.append('\r');
+                    else if (c == 'u' && i + 4 < json.length()) {
+                        try {
+                            int code = Integer.parseInt(json.substring(i + 1, i + 5), 16);
+                            sb.append((char) code);
+                            i += 4;
+                        } catch (Exception ex) {
+                            sb.append(c);
+                        }
+                    } else {
+                        sb.append(c);
+                    }
+                    escape = false;
+                } else if (c == '\\') {
+                    escape = true;
+                } else if (c == '"') {
+                    break;
+                } else {
+                    sb.append(c);
+                }
+            }
+            return sb.toString();
+        } else {
+            int endVal = startVal;
+            while (endVal < json.length() && json.charAt(endVal) != ',' && json.charAt(endVal) != '}'
+                    && json.charAt(endVal) != ']') {
+                endVal++;
+            }
+            return json.substring(startVal, endVal).trim().replaceAll("^\"|\"$", "");
+        }
+    }
+
+    private String extractArtistField(String json) {
+        String pattern = "\"artist\"";
+        int idx = json.indexOf(pattern);
+        if (idx == -1) {
+            return "";
+        }
+        int colonIdx = json.indexOf(':', idx + pattern.length());
+        if (colonIdx == -1) {
+            return "";
+        }
+        int startVal = colonIdx + 1;
+        while (startVal < json.length() && Character.isWhitespace(json.charAt(startVal))) {
+            startVal++;
+        }
+        if (startVal >= json.length()) {
+            return "";
+        }
+
+        if (json.charAt(startVal) == '[') {
+            int endBracket = json.indexOf(']', startVal);
+            if (endBracket != -1) {
+                String arrayStr = json.substring(startVal + 1, endBracket);
+                List<String> artists = new ArrayList<>();
+                for (String part : arrayStr.split(",")) {
+                    String cleaned = part.trim().replaceAll("^\"|\"$", "");
+                    if (!cleaned.isBlank()) {
+                        artists.add(cleaned);
+                    }
+                }
+                return String.join(", ", artists);
+            }
+        }
+        return extractJsonField(json, "artist");
+    }
+
+    private String extractNetEaseArtists(String json) {
+        int idx = json.indexOf("\"artists\"");
+        if (idx == -1) {
+            return "";
+        }
         List<String> names = new ArrayList<>();
-        for (JsonNode artist : value) names.add(artist.isObject() ? artist.path("name").asText("") : artist.asText(""));
-        return String.join(" / ", names);
-    }
-
-    public String fetchSongUrl(String id, String source) throws Exception {
-        if (id == null || id.isBlank()) return "";
-        String provider = source(source);
-        if ("netease".equals(provider)) return directAudio(id);
-        return httpUrl(get(api("types=url&id=" + encode(id) + "&source=" + encode(provider) + "&br=320"))
-                .path("url").asText(""));
-    }
-
-    public String fetchPicUrl(String id, String source) throws Exception {
-        if (id == null || id.isBlank()) return "";
-        if (id.startsWith("https://") || id.startsWith("http://")) return httpUrl(id);
-        String provider = source(source);
-        try {
-            return httpUrl(get(api("types=pic&id=" + encode(id) + "&source=" + encode(provider)))
-                    .path("url").asText(""));
-        } catch (Exception primary) {
-            if (!"netease".equals(provider) || Thread.currentThread().isInterrupted()) throw primary;
-            JsonNode root = get(URI.create(NETEASE + "/api/song/detail/?id=" + encode(id)
-                    + "&ids=" + encode("[" + id + "]")));
-            return httpUrl(root.path("songs").path(0).path("album").path("picUrl").asText(""));
+        int searchStart = idx;
+        while (true) {
+            int nameIdx = json.indexOf("\"name\"", searchStart);
+            if (nameIdx == -1 || nameIdx > json.indexOf(']', idx) && json.indexOf(']', idx) != -1) {
+                break;
+            }
+            String name = extractJsonField(json.substring(nameIdx), "name");
+            if (!name.isBlank() && !names.contains(name)) {
+                names.add(name);
+            }
+            searchStart = nameIdx + 6;
         }
+        return String.join(", ", names);
     }
 
-    public String fetchLyric(String id, String source) throws Exception {
-        if (id == null || id.isBlank()) return "";
-        String provider = source(source);
-        try {
-            return lyric(get(api("types=lyric&id=" + encode(id) + "&source=" + encode(provider))));
-        } catch (Exception primary) {
-            if (!"netease".equals(provider) || Thread.currentThread().isInterrupted()) throw primary;
-            return lyric(get(URI.create(NETEASE + "/api/song/lyric?id=" + encode(id) + "&lv=-1&kv=-1&tv=-1")));
+    private String extractNetEaseAlbum(String json) {
+        int idx = json.indexOf("\"album\"");
+        if (idx == -1) {
+            return "";
         }
+        return extractJsonField(json.substring(idx), "name");
     }
 
-    String fetchLyricFromJsonForTest(String json) { return lyric(JsonSupport.parse(json)); }
-
-    private String lyric(JsonNode root) {
-        if (!root.isObject()) throw new IllegalArgumentException("歌词响应无效");
-        if (root.has("lyric")) return root.path("lyric").asText("");
-        if (root.has("lrc")) return root.path("lrc").path("lyric").asText("");
-        if (root.path("nolyric").asBoolean(false) || root.path("uncollected").asBoolean(false)) return "";
-        throw new IllegalArgumentException("歌词响应缺少歌词字段");
+    private String extractNetEaseAlbumPic(String json) {
+        int idx = json.indexOf("\"album\"");
+        if (idx == -1) {
+            return "";
+        }
+        String albumSub = json.substring(idx);
+        return extractJsonField(albumSub, "picUrl");
     }
 
-    private JsonNode get(URI uri) throws Exception {
-        MusicHttp.validate(uri);
-        if (Thread.currentThread().isInterrupted()) throw new InterruptedException();
-        return JsonSupport.parse(transport.get(uri));
+    private String fetchNetEasePicUrl(String songId) {
+        try {
+            String targetUrl = "https://music.163.com/api/song/detail/?id=" + songId + "&ids=[" + songId + "]";
+            String json = executeGet(targetUrl);
+            int albumIdx = json.indexOf("\"album\"");
+            if (albumIdx != -1) {
+                String pic = extractJsonField(json.substring(albumIdx), "picUrl");
+                if (pic.startsWith("http")) {
+                    return pic;
+                }
+            }
+        } catch (Exception ex) {
+            LOGGER.log(Level.FINE, "Failed to fetch NetEase album pic", ex);
+        }
+        return "";
     }
 
-    private URI api(String query) {
-        String configured = host.get();
-        String base = configured == null || configured.isBlank() ? DEFAULT_API_URL : configured.trim();
-        URI uri = URI.create(base);
-        MusicHttp.validate(uri);
-        if (uri.getFragment() != null) throw new IllegalArgumentException("音乐 API 地址不能含片段");
-        return URI.create(base + (uri.getRawQuery() == null ? "?" : "&") + query);
+    private String extractTopLevelJsonField(String json, String fieldName) {
+        String pattern = "\"" + fieldName + "\"";
+        int depthObj = 0;
+        int depthArr = 0;
+        boolean inString = false;
+        boolean escape = false;
+
+        for (int i = 0; i < json.length() - pattern.length(); i++) {
+            char c = json.charAt(i);
+            if (escape) {
+                escape = false;
+                continue;
+            }
+            if (c == '\\' && inString) {
+                escape = true;
+                continue;
+            }
+            if (c == '"') {
+                inString = !inString;
+                if (inString && depthObj == 1 && depthArr == 0) {
+                    if (json.startsWith(pattern, i)) {
+                        return extractJsonField(json.substring(i), fieldName);
+                    }
+                }
+                continue;
+            }
+            if (inString) {
+                continue;
+            }
+
+            if (c == '{') depthObj++;
+            else if (c == '}') depthObj--;
+            else if (c == '[') depthArr++;
+            else if (c == ']') depthArr--;
+        }
+        return "";
     }
 
-    private static String source(String value) { return value == null || value.isBlank() ? "netease" : value.toLowerCase(Locale.ROOT); }
-    private static String encode(String value) { return URLEncoder.encode(value, StandardCharsets.UTF_8); }
-    private static String directAudio(String id) { return NETEASE + "/song/media/outer/url?id=" + encode(id) + ".mp3"; }
-    private static String httpUrl(String value) {
-        if (!value.isBlank()) MusicHttp.validate(URI.create(value));
-        return value;
+    private boolean isNumeric(String str) {
+        if (str == null || str.isBlank()) return false;
+        for (char c : str.toCharArray()) {
+            if (!Character.isDigit(c)) return false;
+        }
+        return true;
     }
 }

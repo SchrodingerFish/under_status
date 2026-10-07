@@ -3,42 +3,42 @@ package com.cn.schrodinger.understatus.settings;
 import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.Objects;
-import java.nio.file.Path;
 import org.openide.util.NbPreferences;
 
 public final class SettingsRepository {
 
     public static final String DEFAULT_CLOCK_PATTERN = "yyyy-MM-dd EEEE HH:mm:ss";
-    private static final class DefaultHolder {
-        private static final SettingsRepository INSTANCE = new SettingsRepository(
-                new PreferencesSettingsStore(NbPreferences.forModule(SettingsRepository.class)),
-                new KeyringSecretStore(), new FileContentStore(contentDirectory()));
-    }
+    private static final SettingsRepository DEFAULT = new SettingsRepository(
+            new PreferencesSettingsStore(NbPreferences.forModule(SettingsRepository.class)),
+            new KeyringSecretStore(), new FileContentStore(java.nio.file.Path.of(
+                    System.getProperty("netbeans.user", System.getProperty("user.home") + "/.understatus"),
+                    "config", "understatus", "documents")));
     private static final String WEATHER_SECRET = "com.cn.schrodinger.understatus.qweather.apiKey.v2";
 
     private final SettingsStore store;
     private final SecretStore secrets;
-    private final ContentStore content;
+    private final ContentStore contents;
 
     public SettingsRepository(SettingsStore store) {
         this(store, SecretStore.inMemory(new HashMap<>()));
     }
 
     public SettingsRepository(SettingsStore store, SecretStore secrets) {
-        this(store, secrets, null);
+        this(store, secrets, new ContentStore() {
+            @Override public String load(String key, java.util.function.Supplier<String> legacy) { return legacy.get(); }
+            @Override public void save(String key, String value) { store.put(key, value); }
+        });
     }
 
-    public SettingsRepository(SettingsStore store, SecretStore secrets, ContentStore content) {
+    public SettingsRepository(SettingsStore store, SecretStore secrets, ContentStore contents) {
         this.store = Objects.requireNonNull(store);
         this.secrets = Objects.requireNonNull(secrets);
-        this.content = content;
+        this.contents = Objects.requireNonNull(contents);
     }
 
     public static SettingsRepository getDefault() {
-        return DefaultHolder.INSTANCE;
+        return DEFAULT;
     }
-
-    public String loadMusicApiHost() { return store.get("musicApiHost", ""); }
 
     public UnderStatusSettings load() {
         return new UnderStatusSettings(
@@ -88,40 +88,12 @@ public final class SettingsRepository {
         store.putInt("toolboxHeight", settings.toolboxHeight());
     }
 
-    public String loadAlarms() { return store.get("alarmsList", ""); }
-    public void saveAlarms(String alarms) { store.put("alarmsList", alarms == null ? "" : alarms); }
-    public String loadNotes() { return loadNotesResult().value(); }
-    public ContentStore.ReadResult loadNotesResult() { return loadContent("notes", "notesListSerialized"); }
-    public void saveNotes(String notes) { saveContent("notes", "notesListSerialized", notes); }
-    public String loadFavorites() { return loadFavoritesResult().value(); }
-    public ContentStore.ReadResult loadFavoritesResult() { return loadContent("favorites", "musicFavoritesSerialized"); }
-    public void saveFavorites(String favorites) { saveContent("favorites", "musicFavoritesSerialized", favorites); }
-    /** @deprecated Use loadNotesResult/loadFavoritesResult to associate warnings with their payload. */
-    @Deprecated
-    public String contentWarning() { return content == null ? "" : content.warning(); }
-
-    private synchronized ContentStore.ReadResult loadContent(String key, String legacyKey) {
-        if (content == null) return new ContentStore.ReadResult(store.get(legacyKey, ""), "");
-        var saved = content.readResult(key);
-        if (saved.isPresent()) return saved.get();
-        String legacy = store.get(legacyKey, "");
-        // Preserve the original preference as a migration backup.
-        if (!legacy.isEmpty()) content.write(key, legacy);
-        return new ContentStore.ReadResult(legacy, "");
-    }
-
-    private synchronized void saveContent(String key, String legacyKey, String value) {
-        String text = value == null ? "" : value;
-        if (content == null) store.put(legacyKey, text);
-        else content.write(key, text);
-    }
-
-    private static Path contentDirectory() {
-        String userDirectory = System.getProperty("netbeans.user");
-        return userDirectory == null || userDirectory.isBlank()
-                ? Path.of(System.getProperty("user.home"), ".understatus", "content")
-                : Path.of(userDirectory, "config", "understatus", "content");
-    }
+    public String loadAlarms() { return contents.load("alarmsList", () -> store.get("alarmsList", "")); }
+    public void saveAlarms(String alarms) { contents.save("alarmsList", alarms == null ? "" : alarms); }
+    public String loadNotes() { return contents.load("notesListSerialized", () -> store.get("notesListSerialized", "")); }
+    public void saveNotes(String notes) { contents.save("notesListSerialized", notes == null ? "" : notes); }
+    public String loadFavorites() { return contents.load("musicFavoritesSerialized", () -> store.get("musicFavoritesSerialized", "")); }
+    public void saveFavorites(String favorites) { contents.save("musicFavoritesSerialized", favorites == null ? "" : favorites); }
 
     private static String validClockPattern(String pattern) {
         try {

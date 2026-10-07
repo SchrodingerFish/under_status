@@ -15,7 +15,7 @@ public final class JsonParser {
         if (json == null) {
             throw error("响应为空");
         }
-        if (json.length() > 2 * 1024 * 1024) throw error("响应过大");
+        if (json.length() > 2_000_000) throw error("输入超过 200 万字符");
         Cursor cursor = new Cursor(json);
         JsonValue value = cursor.readValue();
         cursor.skipWhitespace();
@@ -40,13 +40,13 @@ public final class JsonParser {
         }
 
         JsonValue readValue() throws WeatherException {
+            if (++depth > 128) throw error("嵌套超过 128 层");
+            try {
             skipWhitespace();
             if (atEnd()) {
                 throw error("缺少值");
             }
-            if (++depth > 64) throw error("嵌套层级过深");
-            try {
-                return switch (input.charAt(position)) {
+            return switch (input.charAt(position)) {
                 case '{' -> readObject();
                 case '[' -> readArray();
                 case '"' -> new JsonValue.StringValue(readString());
@@ -54,10 +54,8 @@ public final class JsonParser {
                 case 'f' -> readLiteral("false", new JsonValue.BooleanValue(false));
                 case 'n' -> readLiteral("null", JsonValue.NullValue.INSTANCE);
                 default -> readNumber();
-                };
-            } finally {
-                depth--;
-            }
+            };
+            } finally { depth--; }
         }
 
         private JsonValue readObject() throws WeatherException {
@@ -174,10 +172,7 @@ public final class JsonParser {
                 readDigits(true);
             }
             try {
-                if (position - start > 256) throw error("数字过长");
-                BigDecimal value = new BigDecimal(input.substring(start, position));
-                if (Math.abs((long) value.scale()) > 1024) throw error("数字指数过大");
-                return new JsonValue.NumberValue(value);
+                return new JsonValue.NumberValue(new BigDecimal(input.substring(start, position)));
             } catch (NumberFormatException ex) {
                 throw error("数字格式无效");
             }

@@ -27,7 +27,7 @@ public final class LatestTask<T> implements AutoCloseable {
             try {
                 T result = work.call();
                 SwingUtilities.invokeLater(() -> deliver(submitted, () -> success.accept(result)));
-            } catch (Throwable error) {
+            } catch (Exception error) {
                 SwingUtilities.invokeLater(() -> deliver(submitted, () -> failure.accept(error)));
             }
         });
@@ -42,4 +42,6 @@ public final class LatestTask<T> implements AutoCloseable {
         closed = true;
         generation.incrementAndGet();
     }
+
+    public void invalidate() { generation.incrementAndGet(); }
 }

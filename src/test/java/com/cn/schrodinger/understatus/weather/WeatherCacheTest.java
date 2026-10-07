@@ -56,4 +56,26 @@ class WeatherCacheTest {
         @Override public Clock withZone(java.time.ZoneId zone) { return this; }
         @Override public Instant instant() { return instant; }
     }
+
+    @Test void boundsCacheAndExpiresOldFallbacks() {
+        MutableClock clock = new MutableClock();
+        WeatherCache cache = new WeatherCache(clock);
+        for (int i = 0; i < 130; i++) cache.put(key(i), "value", Duration.ofMinutes(1));
+        assertTrue(cache.get(key(0), String.class).isEmpty());
+        assertFalse(cache.get(key(129), String.class).isEmpty());
+        clock.instant = clock.instant.plus(Duration.ofHours(7));
+        assertTrue(cache.get(key(129), String.class).isEmpty());
+    }
+
+    @Test void clearingPreventsAnEarlierRequestFromRepopulatingCache() {
+        WeatherCache cache = new WeatherCache();
+        long oldRequest = cache.generation();
+        cache.clear();
+        cache.putIfCurrent(oldRequest, key(0), "outdated", Duration.ofMinutes(1));
+        assertTrue(cache.get(key(0), String.class).isEmpty());
+        cache.putIfCurrent(cache.generation(), key(0), "new", Duration.ofMinutes(1));
+        assertFalse(cache.get(key(0), String.class).isEmpty());
+    }
+
+    private static WeatherCacheKey key(int index) { return new WeatherCacheKey("city" + index, "now", "", "zh", "m", null); }
 }
