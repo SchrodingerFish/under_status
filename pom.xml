@@ -7,7 +7,7 @@
     <groupId>io.github.schrodingerfish.netbeans</groupId>
     <!-- 插件名字 -->
     <artifactId>under_status</artifactId>
-    <version>1.0.0</version>
+    <version>1.1.0</version>
     <!-- 必须声明 packaging 为 nbm -->
     <packaging>nbm</packaging>
 
