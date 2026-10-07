@@ -19,6 +19,7 @@ import com.cn.schrodinger.understatus.weather.WeatherIndexRange;
 import com.cn.schrodinger.understatus.weather.WeatherNow;
 import com.cn.schrodinger.understatus.weather.WeatherReference;
 import java.awt.BorderLayout;
+import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.Window;
@@ -26,6 +27,7 @@ import java.awt.event.WindowEvent;
 import java.awt.event.WindowFocusListener;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -56,8 +58,19 @@ public final class WeatherDetailDialog extends JDialog {
     private final JLabel heading = new JLabel("天气详情 · 正在定位…");
     private final JLabel status = new JLabel(" ");
     private final JTabbedPane rootTabs = new JTabbedPane();
+
+    // Interactive chart panels & visual dashboards
     private final WeatherChartPanel cityHourlyChart = new WeatherChartPanel(List.of());
+    private final DailyWeatherChartPanel cityDailyChart = new DailyWeatherChartPanel();
+    private final WeatherChartPanel gridHourlyChart = new WeatherChartPanel(List.of());
+    private final DailyWeatherChartPanel gridDailyChart = new DailyWeatherChartPanel();
+    private final WeatherChartPanel historicalChart = new WeatherChartPanel(List.of());
     private final PrecipitationChartPanel precipitationChart = new PrecipitationChartPanel();
+    private final WeatherIndicesPanel indicesPanel = new WeatherIndicesPanel();
+    private final AirQualityPanel airQualityPanel = new AirQualityPanel();
+    private final RealtimeWeatherPanel cityNowPanel = new RealtimeWeatherPanel();
+    private final RealtimeWeatherPanel gridNowPanel = new RealtimeWeatherPanel();
+
     private volatile LocationContext location;
 
     public WeatherDetailDialog(Window owner, String apiHost, String apiKey, String city,
@@ -67,11 +80,16 @@ public final class WeatherDetailDialog extends JDialog {
         this.city = city;
         this.autoIp = autoIp;
         this.refreshCallback = refreshCallback;
-        setSize(920, 620);
-        setMinimumSize(new java.awt.Dimension(760, 500));
+        setSize(940, 650);
+        setMinimumSize(new Dimension(780, 520));
         setDefaultCloseOperation(DISPOSE_ON_CLOSE);
         buildUi();
         setupFocusDismiss();
+        getRootPane().registerKeyboardAction(
+                e -> dispose(),
+                javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_ESCAPE, 0),
+                javax.swing.JComponent.WHEN_IN_FOCUSED_WINDOW
+        );
         resolveLocation();
     }
 
@@ -91,7 +109,7 @@ public final class WeatherDetailDialog extends JDialog {
 
         rootTabs.addTab("城市天气", cityTab());
         rootTabs.addTab("格点天气", gridTab());
-        rootTabs.addTab("空气质量", simpleTab("air", this::airText));
+        rootTabs.addTab("空气质量", airTab());
         rootTabs.addTab("天气指数", indicesTab());
         rootTabs.addTab("分钟降水", minutelyTab());
         rootTabs.addTab("天气时光机", historicalTab());
@@ -107,10 +125,8 @@ public final class WeatherDetailDialog extends JDialog {
 
     private JPanel cityTab() {
         JTabbedPane tabs = new JTabbedPane();
-        tabs.addTab("实时", simpleTab("city-now", this::cityNowText));
-        tabs.addTab("每日", rangedTab("city-daily", new String[]{"7天", "3天", "10天", "15天", "30天"},
-                i -> cityDailyText(new ForecastRange[]{ForecastRange.DAYS_7, ForecastRange.DAYS_3,
-                    ForecastRange.DAYS_10, ForecastRange.DAYS_15, ForecastRange.DAYS_30}[i])));
+        tabs.addTab("实时", cityNowTab());
+        tabs.addTab("每日", cityDailyTab());
         tabs.addTab("逐小时", cityHourlyTab());
         tabs.addChangeListener(e -> runLoader(switch (tabs.getSelectedIndex()) {
             case 1 -> "city-daily";
@@ -127,13 +143,22 @@ public final class WeatherDetailDialog extends JDialog {
         return panel;
     }
 
+    private JPanel cityNowTab() {
+        JTextArea area = outputArea();
+        area.setRows(4);
+        Runnable action = () -> load("city-now", area, this::cityNowText, false);
+        loaders.put("city-now", action);
+        JPanel panel = new JPanel(new BorderLayout());
+        panel.add(cityNowPanel, BorderLayout.CENTER);
+        panel.add(new JScrollPane(area), BorderLayout.SOUTH);
+        return panel;
+    }
+
     private JPanel gridTab() {
         JTabbedPane tabs = new JTabbedPane();
-        tabs.addTab("实时", simpleTab("grid-now", this::gridNowText));
-        tabs.addTab("每日", rangedTab("grid-daily", new String[]{"3天", "7天"},
-                i -> gridDailyText(i == 0 ? ForecastRange.DAYS_3 : ForecastRange.DAYS_7)));
-        tabs.addTab("逐小时", rangedTab("grid-hourly", new String[]{"24小时", "72小时"},
-                i -> gridHourlyText(i == 0 ? 24 : 72)));
+        tabs.addTab("实时", gridNowTab());
+        tabs.addTab("每日", gridDailyTab());
+        tabs.addTab("逐小时", gridHourlyTab());
         tabs.addChangeListener(e -> runLoader(switch (tabs.getSelectedIndex()) {
             case 1 -> "grid-daily";
             case 2 -> "grid-hourly";
@@ -149,18 +174,111 @@ public final class WeatherDetailDialog extends JDialog {
         return panel;
     }
 
+    private JPanel gridNowTab() {
+        JTextArea area = outputArea();
+        area.setRows(4);
+        Runnable action = () -> load("grid-now", area, this::gridNowText, false);
+        loaders.put("grid-now", action);
+        JPanel panel = new JPanel(new BorderLayout());
+        panel.add(gridNowPanel, BorderLayout.CENTER);
+        panel.add(new JScrollPane(area), BorderLayout.SOUTH);
+        return panel;
+    }
+
+    private JPanel airTab() {
+        JTextArea area = outputArea();
+        area.setRows(4);
+        Runnable action = () -> load("air", area, this::airText, false);
+        loaders.put("air", action);
+        JPanel panel = new JPanel(new BorderLayout());
+        panel.add(airQualityPanel, BorderLayout.CENTER);
+        panel.add(new JScrollPane(area), BorderLayout.SOUTH);
+        return panel;
+    }
+
     private JPanel indicesTab() {
-        return rangedTab("indices", new String[]{"1天", "3天"},
-                i -> indicesText(i == 0 ? WeatherIndexRange.ONE_DAY : WeatherIndexRange.THREE_DAYS));
+        JTextArea area = outputArea();
+        area.setRows(4);
+        String[] choices = new String[]{"1天", "3天"};
+        JComboBox<String> range = new JComboBox<>(choices);
+        JPanel controls = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
+        controls.add(new JLabel("预报范围："));
+        controls.add(range);
+
+        Runnable action = () -> {
+            String key = "indices-" + range.getSelectedIndex();
+            activate(key);
+            loaders.put(key, () -> load(key, area,
+                    () -> indicesText(range.getSelectedIndex() == 0 ? WeatherIndexRange.ONE_DAY : WeatherIndexRange.THREE_DAYS), false));
+            loaders.get(key).run();
+        };
+        loaders.put("indices", action);
+        range.addActionListener(e -> action.run());
+
+        JPanel panel = new JPanel(new BorderLayout());
+        panel.add(controls, BorderLayout.NORTH);
+        panel.add(indicesPanel, BorderLayout.CENTER);
+        panel.add(new JScrollPane(area), BorderLayout.SOUTH);
+        return panel;
+    }
+
+    private JPanel cityDailyTab() {
+        JTextArea area = outputArea();
+        area.setRows(5);
+        String[] choices = new String[]{"7天", "3天", "10天", "15天", "30天"};
+        JComboBox<String> range = new JComboBox<>(choices);
+        JPanel controls = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
+        controls.add(new JLabel("预报范围："));
+        controls.add(range);
+
+        JScrollPane chartScroll = new JScrollPane(cityDailyChart);
+        chartScroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
+        chartScroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_NEVER);
+        chartScroll.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
+        chartScroll.getHorizontalScrollBar().setUnitIncrement(16);
+
+        Runnable action = () -> {
+            String key = "city-daily-" + range.getSelectedIndex();
+            activate(key);
+            ForecastRange[] ranges = new ForecastRange[]{
+                ForecastRange.DAYS_7, ForecastRange.DAYS_3, ForecastRange.DAYS_10,
+                ForecastRange.DAYS_15, ForecastRange.DAYS_30
+            };
+            loaders.put(key, () -> load(key, area, () -> cityDailyText(ranges[range.getSelectedIndex()]), false));
+            loaders.get(key).run();
+        };
+        loaders.put("city-daily", action);
+        range.addActionListener(e -> action.run());
+
+        JPanel panel = new JPanel(new BorderLayout());
+        panel.add(controls, BorderLayout.NORTH);
+        panel.add(chartScroll, BorderLayout.CENTER);
+        panel.add(new JScrollPane(area), BorderLayout.SOUTH);
+        return panel;
     }
 
     private JPanel cityHourlyTab() {
         JTextArea area = outputArea();
-        area.setRows(6);
+        area.setRows(5);
         JComboBox<String> range = new JComboBox<>(new String[]{"24小时", "72小时", "168小时"});
-        JPanel controls = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        controls.add(new JLabel("范围："));
+        JComboBox<WeatherChartPanel.Metric> metricCombo = new JComboBox<>(WeatherChartPanel.Metric.values());
+        metricCombo.addActionListener(e -> {
+            WeatherChartPanel.Metric m = (WeatherChartPanel.Metric) metricCombo.getSelectedItem();
+            cityHourlyChart.setMetric(m);
+        });
+
+        JPanel controls = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
+        controls.add(new JLabel("预报范围："));
         controls.add(range);
+        controls.add(new JLabel("指标："));
+        controls.add(metricCombo);
+
+        JScrollPane chartScroll = new JScrollPane(cityHourlyChart);
+        chartScroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
+        chartScroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_NEVER);
+        chartScroll.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
+        chartScroll.getHorizontalScrollBar().setUnitIncrement(16);
+
         Runnable action = () -> {
             String key = "city-hourly-" + range.getSelectedIndex();
             activate(key);
@@ -170,9 +288,81 @@ public final class WeatherDetailDialog extends JDialog {
         };
         loaders.put("city-hourly", action);
         range.addActionListener(e -> action.run());
+
         JPanel panel = new JPanel(new BorderLayout());
         panel.add(controls, BorderLayout.NORTH);
-        panel.add(new JScrollPane(cityHourlyChart), BorderLayout.CENTER);
+        panel.add(chartScroll, BorderLayout.CENTER);
+        panel.add(new JScrollPane(area), BorderLayout.SOUTH);
+        return panel;
+    }
+
+    private JPanel gridDailyTab() {
+        JTextArea area = outputArea();
+        area.setRows(5);
+        String[] choices = new String[]{"3天", "7天"};
+        JComboBox<String> range = new JComboBox<>(choices);
+        JPanel controls = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
+        controls.add(new JLabel("格点范围："));
+        controls.add(range);
+
+        JScrollPane chartScroll = new JScrollPane(gridDailyChart);
+        chartScroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
+        chartScroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_NEVER);
+        chartScroll.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
+        chartScroll.getHorizontalScrollBar().setUnitIncrement(16);
+
+        Runnable action = () -> {
+            String key = "grid-daily-" + range.getSelectedIndex();
+            activate(key);
+            loaders.put(key, () -> load(key, area,
+                    () -> gridDailyText(range.getSelectedIndex() == 0 ? ForecastRange.DAYS_3 : ForecastRange.DAYS_7), false));
+            loaders.get(key).run();
+        };
+        loaders.put("grid-daily", action);
+        range.addActionListener(e -> action.run());
+
+        JPanel panel = new JPanel(new BorderLayout());
+        panel.add(controls, BorderLayout.NORTH);
+        panel.add(chartScroll, BorderLayout.CENTER);
+        panel.add(new JScrollPane(area), BorderLayout.SOUTH);
+        return panel;
+    }
+
+    private JPanel gridHourlyTab() {
+        JTextArea area = outputArea();
+        area.setRows(5);
+        JComboBox<String> range = new JComboBox<>(new String[]{"24小时", "72小时"});
+        JComboBox<WeatherChartPanel.Metric> metricCombo = new JComboBox<>(WeatherChartPanel.Metric.values());
+        metricCombo.addActionListener(e -> {
+            WeatherChartPanel.Metric m = (WeatherChartPanel.Metric) metricCombo.getSelectedItem();
+            gridHourlyChart.setMetric(m);
+        });
+
+        JPanel controls = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
+        controls.add(new JLabel("格点范围："));
+        controls.add(range);
+        controls.add(new JLabel("指标："));
+        controls.add(metricCombo);
+
+        JScrollPane chartScroll = new JScrollPane(gridHourlyChart);
+        chartScroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
+        chartScroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_NEVER);
+        chartScroll.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
+        chartScroll.getHorizontalScrollBar().setUnitIncrement(16);
+
+        Runnable action = () -> {
+            String key = "grid-hourly-" + range.getSelectedIndex();
+            activate(key);
+            loaders.put(key, () -> load(key, area,
+                    () -> gridHourlyText(range.getSelectedIndex() == 0 ? 24 : 72), false));
+            loaders.get(key).run();
+        };
+        loaders.put("grid-hourly", action);
+        range.addActionListener(e -> action.run());
+
+        JPanel panel = new JPanel(new BorderLayout());
+        panel.add(controls, BorderLayout.NORTH);
+        panel.add(chartScroll, BorderLayout.CENTER);
         panel.add(new JScrollPane(area), BorderLayout.SOUTH);
         return panel;
     }
@@ -189,10 +379,36 @@ public final class WeatherDetailDialog extends JDialog {
     }
 
     private JPanel historicalTab() {
+        JTextArea area = outputArea();
+        area.setRows(5);
         String[] dates = new String[10];
         for (int i = 0; i < dates.length; i++) dates[i] = i == 0 ? "昨天" : (i + 1) + "天前";
-        return rangedTab("historical", dates,
-                i -> historicalText(LocalDate.now(location.zoneId()).minusDays(i + 1L)));
+        JComboBox<String> range = new JComboBox<>(dates);
+        JPanel controls = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
+        controls.add(new JLabel("日期选择："));
+        controls.add(range);
+
+        JScrollPane chartScroll = new JScrollPane(historicalChart);
+        chartScroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
+        chartScroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_NEVER);
+        chartScroll.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
+        chartScroll.getHorizontalScrollBar().setUnitIncrement(16);
+
+        Runnable action = () -> {
+            String key = "historical-" + range.getSelectedIndex();
+            activate(key);
+            loaders.put(key, () -> load(key, area,
+                    () -> historicalText(LocalDate.now(location.zoneId()).minusDays(range.getSelectedIndex() + 1L)), false));
+            loaders.get(key).run();
+        };
+        loaders.put("historical", action);
+        range.addActionListener(e -> action.run());
+
+        JPanel panel = new JPanel(new BorderLayout());
+        panel.add(controls, BorderLayout.NORTH);
+        panel.add(chartScroll, BorderLayout.CENTER);
+        panel.add(new JScrollPane(area), BorderLayout.SOUTH);
+        return panel;
     }
 
     private JPanel simpleTab(String key, Callable<String> loader) {
@@ -231,7 +447,7 @@ public final class WeatherDetailDialog extends JDialog {
         area.setLineWrap(true);
         area.setWrapStyleWord(true);
         area.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 13));
-        area.setBorder(BorderFactory.createEmptyBorder(12, 14, 12, 14));
+        area.setBorder(BorderFactory.createEmptyBorder(10, 12, 10, 12));
         return area;
     }
 
@@ -329,7 +545,8 @@ public final class WeatherDetailDialog extends JDialog {
     private String cityNowText() throws Exception {
         Result<WeatherNow> result = data.now(config, location, false);
         WeatherNow w = result.value();
-        return "实时天气\n\n温度 " + w.temperatureCelsius() + "°C　体感 "
+        SwingUtilities.invokeLater(() -> cityNowPanel.setCityWeather(w, location.name(), result.stale()));
+        return "实时天气 · " + location.name() + "\n\n温度 " + w.temperatureCelsius() + "°C　体感 "
                 + w.feelsLikeCelsius() + "°C　" + w.condition() + "\n湿度 "
                 + w.humidityPercent() + "%　风向 " + w.windDirection() + " "
                 + w.windScale() + "级　风速 " + w.windSpeedKph() + " km/h\n气压 "
@@ -340,12 +557,31 @@ public final class WeatherDetailDialog extends JDialog {
     private String cityDailyText(ForecastRange range) throws Exception {
         Result<List<DailyForecast>> result = data.daily(config, location, range, false);
         List<DailyForecast> values = result.value();
+
+        LocalDate today = LocalDate.now(location.zoneId());
+        List<DailyWeatherChartPanel.DailyItem> chartItems = new ArrayList<>();
         StringBuilder text = new StringBuilder("每日天气预报\n\n");
-        for (DailyForecast d : values) text.append(d.date()).append("　")
-                .append(d.dayCondition()).append('/').append(d.nightCondition()).append("　")
-                .append(d.minimumTemperatureCelsius()).append("~")
-                .append(d.maximumTemperatureCelsius()).append("°C　降水 ")
-                .append(d.precipitationMm()).append("mm\n");
+        for (DailyForecast d : values) {
+            String dateStr = d.date().format(DateTimeFormatter.ofPattern("MM-dd"));
+            String weekStr = formatWeekday(d.date(), today);
+            chartItems.add(new DailyWeatherChartPanel.DailyItem(
+                    dateStr, weekStr,
+                    d.maximumTemperatureCelsius(), d.minimumTemperatureCelsius(),
+                    d.dayCondition(), d.nightCondition(),
+                    d.precipitationMm(), d.humidityPercent(),
+                    d.dayWindDirection() + " " + d.dayWindScale() + "级",
+                    d.uvIndex() != null ? d.uvIndex() : -1,
+                    d.sunrise(), d.sunset()
+            ));
+
+            text.append(d.date()).append(" (").append(weekStr).append(")　")
+                    .append(d.dayCondition()).append('/').append(d.nightCondition()).append("　")
+                    .append(d.minimumTemperatureCelsius()).append("~")
+                    .append(d.maximumTemperatureCelsius()).append("°C　降水 ")
+                    .append(d.precipitationMm()).append("mm\n");
+        }
+        SwingUtilities.invokeLater(() -> cityDailyChart.setDailyForecasts(chartItems));
+
         if (!values.isEmpty()) text.append('\n').append(reference(values.get(0).reference()));
         return text.append(stale(result)).toString();
     }
@@ -353,12 +589,24 @@ public final class WeatherDetailDialog extends JDialog {
     private String cityHourlyText(int hours) throws Exception {
         Result<List<HourlyForecast>> result = data.hourly(config, location, hours, false);
         List<HourlyForecast> values = result.value();
+
         List<QWeatherService.HourlyForecast> chartValues = values.stream()
                 .map(h -> new QWeatherService.HourlyForecast(
-                        h.time().atZoneSameInstant(location.zoneId())
-                                .format(DateTimeFormatter.ofPattern("HH:mm")),
-                        h.temperatureCelsius(), h.condition())).toList();
+                        h.time().atZoneSameInstant(location.zoneId()).format(DateTimeFormatter.ofPattern("HH:mm")),
+                        h.time().atZoneSameInstant(location.zoneId()).format(DateTimeFormatter.ofPattern("MM-dd HH:mm")),
+                        h.temperatureCelsius(),
+                        h.condition(),
+                        h.humidityPercent(),
+                        h.precipitationMm(),
+                        h.windSpeedKph(),
+                        h.windDirection(),
+                        h.windScale(),
+                        h.pressureHpa(),
+                        h.precipitationProbability(),
+                        h.time().atZoneSameInstant(location.zoneId()).format(DateTimeFormatter.ofPattern("MM-dd"))
+                )).toList();
         SwingUtilities.invokeLater(() -> cityHourlyChart.setForecasts(chartValues));
+
         StringBuilder text = new StringBuilder("逐小时天气预报\n\n");
         for (HourlyForecast h : values) text.append(h.time().atZoneSameInstant(location.zoneId())
                 .format(DateTimeFormatter.ofPattern("MM-dd HH:mm")))
@@ -373,21 +621,41 @@ public final class WeatherDetailDialog extends JDialog {
     private String gridNowText() throws Exception {
         Result<GridWeatherNow> result = data.gridNow(config, location, false);
         GridWeatherNow w = result.value();
-        return "格点实时天气　坐标 " + location.coordinate() + "\n\n温度 "
+        SwingUtilities.invokeLater(() -> gridNowPanel.setGridWeather(w, location.coordinate(), result.stale()));
+        return "格点实时天气 · 经纬度 " + location.coordinate() + "\n\n温度 "
                 + w.temperatureCelsius() + "°C　" + w.condition() + "\n湿度 "
                 + w.humidityPercent() + "%　风向 " + w.windDirection() + " "
-                + w.windScale() + "级　降水 " + w.precipitationMm() + "mm\n"
+                + w.windScale() + "级　风速 " + w.windSpeedKph() + " km/h　降水 "
+                + w.precipitationMm() + " mm\n气压 " + w.pressureHpa() + " hPa\n"
                 + reference(w.reference()) + stale(result);
     }
 
     private String gridDailyText(ForecastRange range) throws Exception {
         Result<List<GridDailyForecast>> result = data.gridDaily(config, location, range, false);
         List<GridDailyForecast> values = result.value();
+
+        LocalDate today = LocalDate.now(location.zoneId());
+        List<DailyWeatherChartPanel.DailyItem> chartItems = new ArrayList<>();
         StringBuilder text = new StringBuilder("格点每日预报　坐标 ").append(location.coordinate()).append("\n\n");
-        for (GridDailyForecast d : values) text.append(d.date()).append("　")
-                .append(d.dayCondition()).append('/').append(d.nightCondition()).append("　")
-                .append(d.minimumTemperatureCelsius()).append("~")
-                .append(d.maximumTemperatureCelsius()).append("°C\n");
+        for (GridDailyForecast d : values) {
+            String dateStr = d.date().format(DateTimeFormatter.ofPattern("MM-dd"));
+            String weekStr = formatWeekday(d.date(), today);
+            chartItems.add(new DailyWeatherChartPanel.DailyItem(
+                    dateStr, weekStr,
+                    d.maximumTemperatureCelsius(), d.minimumTemperatureCelsius(),
+                    d.dayCondition(), d.nightCondition(),
+                    d.precipitationMm(), d.humidityPercent(),
+                    d.dayWindDirection() + " " + d.dayWindScale() + "级",
+                    -1, "", ""
+            ));
+
+            text.append(d.date()).append(" (").append(weekStr).append(")　")
+                    .append(d.dayCondition()).append('/').append(d.nightCondition()).append("　")
+                    .append(d.minimumTemperatureCelsius()).append("~")
+                    .append(d.maximumTemperatureCelsius()).append("°C\n");
+        }
+        SwingUtilities.invokeLater(() -> gridDailyChart.setDailyForecasts(chartItems));
+
         if (!values.isEmpty()) text.append('\n').append(reference(values.get(0).reference()));
         return text.append(stale(result)).toString();
     }
@@ -395,6 +663,24 @@ public final class WeatherDetailDialog extends JDialog {
     private String gridHourlyText(int hours) throws Exception {
         Result<List<GridHourlyForecast>> result = data.gridHourly(config, location, hours, false);
         List<GridHourlyForecast> values = result.value();
+
+        List<QWeatherService.HourlyForecast> chartValues = values.stream()
+                .map(h -> new QWeatherService.HourlyForecast(
+                        h.time().atZoneSameInstant(location.zoneId()).format(DateTimeFormatter.ofPattern("HH:mm")),
+                        h.time().atZoneSameInstant(location.zoneId()).format(DateTimeFormatter.ofPattern("MM-dd HH:mm")),
+                        h.temperatureCelsius(),
+                        h.condition(),
+                        h.humidityPercent(),
+                        h.precipitationMm(),
+                        h.windSpeedKph(),
+                        h.windDirection(),
+                        h.windScale(),
+                        h.pressureHpa(),
+                        null,
+                        h.time().atZoneSameInstant(location.zoneId()).format(DateTimeFormatter.ofPattern("MM-dd"))
+                )).toList();
+        SwingUtilities.invokeLater(() -> gridHourlyChart.setForecasts(chartValues));
+
         StringBuilder text = new StringBuilder("格点逐小时预报　坐标 ").append(location.coordinate()).append("\n\n");
         for (GridHourlyForecast h : values) text.append(h.time().atZoneSameInstant(location.zoneId())
                 .format(DateTimeFormatter.ofPattern("MM-dd HH:mm"))).append("　")
@@ -407,6 +693,7 @@ public final class WeatherDetailDialog extends JDialog {
     private String airText() throws Exception {
         Result<AirQualitySnapshot> result = data.air(config, location, false);
         AirQualitySnapshot a = result.value();
+        SwingUtilities.invokeLater(() -> airQualityPanel.setAirQuality(a));
         StringBuilder text = new StringBuilder("实时空气质量\n\nAQI ").append(a.aqi())
                 .append("　").append(a.category()).append("\n主要污染物：")
                 .append(a.primaryPollutant().isBlank() ? "无" : a.primaryPollutant()).append("\n\n");
@@ -420,6 +707,7 @@ public final class WeatherDetailDialog extends JDialog {
     private String indicesText(WeatherIndexRange range) throws Exception {
         Result<List<WeatherIndex>> result = data.indices(config, location, range, false);
         List<WeatherIndex> values = result.value();
+        SwingUtilities.invokeLater(() -> indicesPanel.setIndices(values));
         StringBuilder text = new StringBuilder("全部可用天气生活指数\n\n");
         for (String group : List.of("健康", "出行", "生活")) {
             text.append("【").append(group).append("】\n");
@@ -449,6 +737,24 @@ public final class WeatherDetailDialog extends JDialog {
         Result<HistoricalWeather> result = data.historical(config, location, date, false);
         HistoricalWeather h = result.value();
         HistoricalWeather.Daily d = h.daily();
+
+        List<QWeatherService.HourlyForecast> chartValues = h.hourly().stream()
+                .map(hour -> new QWeatherService.HourlyForecast(
+                        hour.time().format(DateTimeFormatter.ofPattern("HH:mm")),
+                        hour.time().format(DateTimeFormatter.ofPattern("MM-dd HH:mm")),
+                        hour.temperatureCelsius(),
+                        hour.condition(),
+                        hour.humidityPercent(),
+                        hour.precipitationMm(),
+                        hour.windSpeedKph(),
+                        hour.windDirection(),
+                        hour.windScale(),
+                        hour.pressureHpa(),
+                        null,
+                        hour.time().format(DateTimeFormatter.ofPattern("MM-dd"))
+                )).toList();
+        SwingUtilities.invokeLater(() -> historicalChart.setForecasts(chartValues));
+
         StringBuilder text = new StringBuilder("天气时光机　").append(date).append("\n\n")
                 .append("最高/最低温：").append(d.maximumTemperatureCelsius()).append("/")
                 .append(d.minimumTemperatureCelsius()).append("°C　湿度 ")
@@ -460,6 +766,21 @@ public final class WeatherDetailDialog extends JDialog {
                 .append("　").append(hour.temperatureCelsius()).append("°C　降水 ")
                 .append(hour.precipitationMm()).append("mm\n");
         return text.append('\n').append(reference(h.reference())).append(stale(result)).toString();
+    }
+
+    private static String formatWeekday(LocalDate date, LocalDate today) {
+        if (date.equals(today)) return "今天";
+        if (date.equals(today.plusDays(1))) return "明天";
+        if (date.equals(today.plusDays(2))) return "后天";
+        return switch (date.getDayOfWeek()) {
+            case MONDAY -> "周一";
+            case TUESDAY -> "周二";
+            case WEDNESDAY -> "周三";
+            case THURSDAY -> "周四";
+            case FRIDAY -> "周五";
+            case SATURDAY -> "周六";
+            case SUNDAY -> "周日";
+        };
     }
 
     private static String reference(WeatherReference reference) {

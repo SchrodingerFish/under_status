@@ -36,6 +36,11 @@ public class AlarmSettingDialog extends JDialog {
         setTitle("定时闹钟管理 (Alarms Configuration)");
         initComponents();
         loadSettings();
+        getRootPane().registerKeyboardAction(
+                e -> dispose(),
+                javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_ESCAPE, 0),
+                javax.swing.JComponent.WHEN_IN_FOCUSED_WINDOW
+        );
         pack();
         setLocationRelativeTo(parent);
     }

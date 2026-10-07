@@ -98,6 +98,11 @@ public class ToolbarSettingDialog extends JDialog {
         setTitle("状态栏与工具箱配置 (under_status Toolbar Config)");
         initComponents();
         loadSettings();
+        getRootPane().registerKeyboardAction(
+                e -> dispose(),
+                javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_ESCAPE, 0),
+                javax.swing.JComponent.WHEN_IN_FOCUSED_WINDOW
+        );
         pack();
         setLocationRelativeTo(parent);
     }

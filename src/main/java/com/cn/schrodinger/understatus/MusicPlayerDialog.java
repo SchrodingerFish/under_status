@@ -40,6 +40,12 @@ public class MusicPlayerDialog extends JDialog {
         pack();
         setLocationRelativeTo(parent);
 
+        getRootPane().registerKeyboardAction(
+                e -> dispose(),
+                javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_ESCAPE, 0),
+                javax.swing.JComponent.WHEN_IN_FOCUSED_WINDOW
+        );
+
         addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent e) {

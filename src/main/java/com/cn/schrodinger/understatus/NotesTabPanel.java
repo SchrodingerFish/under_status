@@ -38,8 +38,10 @@ public class NotesTabPanel extends JPanel {
     private JList<String> noteJList;
     private JTextArea noteTextArea;
     private boolean isUpdatingSelection = false;
+    private final javax.swing.Timer saveDebounceTimer = new javax.swing.Timer(500, e -> flushSaveToPreferences());
 
     public NotesTabPanel() {
+        saveDebounceTimer.setRepeats(false);
         initComponents();
         loadNotesFromPreferences();
         if (!notesList.isEmpty()) {
@@ -51,6 +53,12 @@ public class NotesTabPanel extends JPanel {
         setLayout(new BorderLayout());
         setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
 
+        addHierarchyListener(e -> {
+            if ((e.getChangeFlags() & java.awt.event.HierarchyEvent.SHOWING_CHANGED) != 0 && !isShowing()) {
+                flushSaveToPreferences();
+            }
+        });
+
         // Left Panel (JList & CRUD Buttons)
         JPanel leftPanel = new JPanel(new BorderLayout(5, 5));
         leftPanel.setPreferredSize(new Dimension(130, 0));
@@ -60,6 +68,7 @@ public class NotesTabPanel extends JPanel {
         noteJList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         noteJList.addListSelectionListener(e -> {
             if (e.getValueIsAdjusting()) return;
+            flushSaveToPreferences();
             int idx = noteJList.getSelectedIndex();
             if (idx >= 0) {
                 isUpdatingSelection = true;
@@ -122,8 +131,15 @@ public class NotesTabPanel extends JPanel {
         int idx = noteJList.getSelectedIndex();
         if (idx >= 0) {
             notesList.get(idx).content = noteTextArea.getText();
-            saveNotesToPreferences();
+            saveDebounceTimer.restart();
         }
+    }
+
+    public void flushSaveToPreferences() {
+        if (saveDebounceTimer.isRunning()) {
+            saveDebounceTimer.stop();
+        }
+        saveNotesToPreferences();
     }
 
     private void addNote() {

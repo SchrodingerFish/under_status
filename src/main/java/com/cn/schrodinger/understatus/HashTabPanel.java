@@ -31,7 +31,11 @@ public class HashTabPanel extends JPanel {
     private JTextField sha256Field;
     private JTextField sha512Field;
 
+    private final javax.swing.Timer debounceTimer;
+
     public HashTabPanel() {
+        debounceTimer = new javax.swing.Timer(150, e -> runHash());
+        debounceTimer.setRepeats(false);
         initComponents();
         runHash();
     }
@@ -47,11 +51,11 @@ public class HashTabPanel extends JPanel {
         inputTextArea.setWrapStyleWord(true);
         inputTextArea.getDocument().addDocumentListener(new DocumentListener() {
             @Override
-            public void insertUpdate(DocumentEvent e) { runHash(); }
+            public void insertUpdate(DocumentEvent e) { debounceTimer.restart(); }
             @Override
-            public void removeUpdate(DocumentEvent e) { runHash(); }
+            public void removeUpdate(DocumentEvent e) { debounceTimer.restart(); }
             @Override
-            public void changedUpdate(DocumentEvent e) { runHash(); }
+            public void changedUpdate(DocumentEvent e) { debounceTimer.restart(); }
         });
 
         JScrollPane scrollPane = new JScrollPane(inputTextArea);

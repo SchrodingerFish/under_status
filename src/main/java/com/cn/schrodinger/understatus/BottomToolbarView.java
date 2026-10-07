@@ -25,8 +25,10 @@ import javax.swing.BoxLayout;
 import javax.swing.JButton;
 import javax.swing.JDialog;
 import javax.swing.JLabel;
+import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JPopupMenu;
 import javax.swing.JSeparator;
 import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
@@ -58,7 +60,7 @@ public class BottomToolbarView extends JPanel {
     // Sub-components
     private JLabel clockLabel;
     private JButton formatButton;
-    private JLabel memoryLabel;
+    private MemoryIndicatorLabel memoryLabel;
     private JButton pomodoroButton;
     private JButton readOnlyButton;
     private JLabel metricsLabel;
@@ -182,30 +184,44 @@ public class BottomToolbarView extends JPanel {
         formatButton.addActionListener(e -> triggerFormat());
 
         // 3. Memory Monitor Label
-        memoryLabel = new JLabel("📊 --M/--M");
-        memoryLabel.setFont(UIManager.getFont("Label.font").deriveFont(11f));
-        memoryLabel.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR));
-        memoryLabel.setToolTipText("JVM堆内存使用量 (点击触发垃圾回收垃圾清理)");
+        memoryLabel = new MemoryIndicatorLabel();
         memoryLabel.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
                 if (SwingUtilities.isLeftMouseButton(e)) {
+                    long beforeUsed = (Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()) / (1024 * 1024);
                     System.gc();
-                    StatusDisplayer.getDefault().setStatusText("JVM垃圾清理已触发 (JVM GC Triggered)");
                     updateMemoryInfo();
+                    long afterUsed = (Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()) / (1024 * 1024);
+                    long freed = beforeUsed - afterUsed;
+                    if (freed > 0) {
+                        StatusDisplayer.getDefault().setStatusText(String.format("JVM 垃圾回收完成，已释放 %d MB 堆内存", freed));
+                    } else {
+                        StatusDisplayer.getDefault().setStatusText("JVM 垃圾回收已触发 (JVM GC Triggered)");
+                    }
                 }
             }
         });
 
         // 4. Pomodoro Button
-        pomodoroButton = createFlatButton("🍅 番茄钟", "点击开始/暂停，双击重置番茄钟");
+        pomodoroButton = createFlatButton("🍅 番茄钟", "左键开始/暂停，双击重置，右键快捷配置");
         pomodoroButton.addActionListener(e -> togglePomodoro());
         pomodoroButton.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
-                if (e.getClickCount() == 2) {
+                if (SwingUtilities.isRightMouseButton(e) || e.isPopupTrigger()) {
+                    showPomodoroMenu(e);
+                } else if (e.getClickCount() == 2) {
                     resetPomodoro();
                 }
+            }
+            @Override
+            public void mousePressed(MouseEvent e) {
+                if (e.isPopupTrigger()) showPomodoroMenu(e);
+            }
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                if (e.isPopupTrigger()) showPomodoroMenu(e);
             }
         });
 
@@ -399,8 +415,108 @@ public class BottomToolbarView extends JPanel {
     private void updateMemoryInfo() {
         long totalMemory = Runtime.getRuntime().totalMemory() / (1024 * 1024);
         long freeMemory = Runtime.getRuntime().freeMemory() / (1024 * 1024);
+        long maxMemory = Runtime.getRuntime().maxMemory() / (1024 * 1024);
         long usedMemory = totalMemory - freeMemory;
-        memoryLabel.setText(String.format("📊 %dM/%dM", usedMemory, totalMemory));
+        memoryLabel.updateMemory(usedMemory, totalMemory, maxMemory);
+    }
+
+    private void showPomodoroMenu(MouseEvent e) {
+        JPopupMenu menu = new JPopupMenu();
+        JMenuItem toggleItem = new JMenuItem(pomodoroEngine.isRunning() ? "⏸ 暂停番茄钟" : "▶ 开始专注");
+        toggleItem.addActionListener(ev -> togglePomodoro());
+        menu.add(toggleItem);
+
+        JMenuItem skipItem = new JMenuItem("⏭ 跳过当前阶段 (" + ("WORK".equals(pomodoroEngine.getState()) ? "进入休息" : "进入专注") + ")");
+        skipItem.addActionListener(ev -> {
+            pomodoroEngine.setTimeLeft(1);
+            tickPomodoro();
+        });
+        menu.add(skipItem);
+
+        JMenuItem resetItem = new JMenuItem("🔄 重置番茄钟");
+        resetItem.addActionListener(ev -> resetPomodoro());
+        menu.add(resetItem);
+
+        menu.addSeparator();
+
+        int currentWork = pomodoroEngine.getWorkMinutes();
+        int[] workPresets = {15, 25, 45, 60};
+        for (int min : workPresets) {
+            JMenuItem item = new JMenuItem((currentWork == min ? "✓ " : "   ") + "专注: " + min + " 分钟");
+            item.addActionListener(ev -> {
+                pomodoroEngine.init(min, pomodoroEngine.getBreakMinutes());
+                updatePomodoroText();
+            });
+            menu.add(item);
+        }
+
+        menu.addSeparator();
+
+        int currentBreak = pomodoroEngine.getBreakMinutes();
+        int[] breakPresets = {5, 10, 15};
+        for (int min : breakPresets) {
+            JMenuItem item = new JMenuItem((currentBreak == min ? "✓ " : "   ") + "休息: " + min + " 分钟");
+            item.addActionListener(ev -> {
+                pomodoroEngine.init(pomodoroEngine.getWorkMinutes(), min);
+                updatePomodoroText();
+            });
+            menu.add(item);
+        }
+
+        menu.show(pomodoroButton, e.getX(), e.getY());
+    }
+
+    private static class MemoryIndicatorLabel extends JLabel {
+        private int percent = 0;
+        private Color barColor = new Color(82, 196, 26);
+        private long lastUsedM = -1;
+        private long lastTotalM = -1;
+
+        MemoryIndicatorLabel() {
+            super("📊 --M/--M");
+            setFont(UIManager.getFont("Label.font").deriveFont(11f));
+            setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR));
+            setBorder(BorderFactory.createEmptyBorder(1, 4, 3, 4));
+        }
+
+        void updateMemory(long usedM, long totalM, long maxM) {
+            if (usedM == lastUsedM && totalM == lastTotalM) {
+                return; // Memory values unchanged, avoid unnecessary layout/repaint
+            }
+            lastUsedM = usedM;
+            lastTotalM = totalM;
+
+            this.percent = (int) Math.min(100, Math.max(0, Math.round(usedM * 100.0 / totalM)));
+            if (percent >= 85) {
+                barColor = new Color(255, 77, 79);
+            } else if (percent >= 65) {
+                barColor = new Color(250, 173, 20);
+            } else {
+                barColor = new Color(82, 196, 26);
+            }
+            setText(String.format("📊 %dM/%dM", usedM, totalM));
+            setToolTipText(String.format(
+                    "<html><b>JVM 堆内存监控</b><br>已使用: %d MB (%d%%)<br>已提交: %d MB<br>最大可用: %d MB<br><i>点击触发垃圾回收 (GC)</i></html>",
+                    usedM, percent, totalM, maxM));
+            repaint();
+        }
+
+        @Override
+        protected void paintComponent(java.awt.Graphics g) {
+            super.paintComponent(g);
+            java.awt.Graphics2D g2 = (java.awt.Graphics2D) g.create();
+            g2.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
+            int w = getWidth() - 8;
+            int h = 3;
+            int x = 4;
+            int y = getHeight() - h - 1;
+            g2.setColor(new Color(150, 150, 150, 60));
+            g2.fillRoundRect(x, y, w, h, 2, 2);
+            int barW = Math.max(2, (w * percent) / 100);
+            g2.setColor(barColor);
+            g2.fillRoundRect(x, y, barW, h, 2, 2);
+            g2.dispose();
+        }
     }
 
     private void tickPomodoro() {

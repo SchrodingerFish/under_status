@@ -53,6 +53,37 @@ public sealed interface JsonValue permits JsonValue.ObjectValue, JsonValue.Array
             return this;
         }
 
+        @Override
+        public String asString() {
+            // When an object is queried as string (e.g. primaryPollutant: {"name":"PM2.5"}),
+            // extract the most descriptive text field if available
+            JsonValue name = values.get("name");
+            if (name != null && name != NullValue.INSTANCE && !(name instanceof ObjectValue)) {
+                try {
+                    return name.asString();
+                } catch (Exception ignored) {}
+            }
+            JsonValue code = values.get("code");
+            if (code != null && code != NullValue.INSTANCE && !(code instanceof ObjectValue)) {
+                try {
+                    return code.asString();
+                } catch (Exception ignored) {}
+            }
+            JsonValue fullName = values.get("fullName");
+            if (fullName != null && fullName != NullValue.INSTANCE && !(fullName instanceof ObjectValue)) {
+                try {
+                    return fullName.asString();
+                } catch (Exception ignored) {}
+            }
+            JsonValue val = values.get("value");
+            if (val != null && val != NullValue.INSTANCE && !(val instanceof ObjectValue)) {
+                try {
+                    return val.asString();
+                } catch (Exception ignored) {}
+            }
+            return "";
+        }
+
         public Optional<JsonValue> optional(String key) {
             return Optional.ofNullable(values.get(key));
         }
@@ -82,6 +113,11 @@ public sealed interface JsonValue permits JsonValue.ObjectValue, JsonValue.Array
         public List<JsonValue> asArray() {
             return values;
         }
+
+        @Override
+        public String asString() {
+            return "";
+        }
     }
 
     record StringValue(String value) implements JsonValue {
@@ -89,33 +125,98 @@ public sealed interface JsonValue permits JsonValue.ObjectValue, JsonValue.Array
         public String asString() {
             return value;
         }
+
+        @Override
+        public double asDouble() throws WeatherException {
+            try {
+                return Double.parseDouble(value.trim());
+            } catch (Exception ex) {
+                throw new WeatherException(WeatherException.Kind.RESPONSE,
+                        "天气响应 JSON 字符串不是有效数字: " + value, ex);
+            }
+        }
+
+        @Override
+        public int asInt() throws WeatherException {
+            try {
+                return (int) Math.round(Double.parseDouble(value.trim()));
+            } catch (Exception ex) {
+                throw new WeatherException(WeatherException.Kind.RESPONSE,
+                        "天气响应 JSON 字符串不是有效整数: " + value, ex);
+            }
+        }
+
+        @Override
+        public boolean asBoolean() {
+            return "true".equalsIgnoreCase(value.trim()) || "1".equals(value.trim());
+        }
     }
 
     record NumberValue(BigDecimal value) implements JsonValue {
         @Override
-        public int asInt() throws WeatherException {
-            try {
-                return value.intValueExact();
-            } catch (ArithmeticException ex) {
-                throw new WeatherException(WeatherException.Kind.RESPONSE,
-                        "天气响应 JSON 数字不是有效整数", ex);
-            }
+        public String asString() {
+            return value.toPlainString();
+        }
+
+        @Override
+        public int asInt() {
+            return value.intValue();
         }
 
         @Override
         public double asDouble() {
             return value.doubleValue();
         }
+
+        @Override
+        public boolean asBoolean() {
+            return value.signum() != 0;
+        }
     }
 
     record BooleanValue(boolean value) implements JsonValue {
         @Override
+        public String asString() {
+            return Boolean.toString(value);
+        }
+
+        @Override
         public boolean asBoolean() {
             return value;
+        }
+
+        @Override
+        public int asInt() {
+            return value ? 1 : 0;
+        }
+
+        @Override
+        public double asDouble() {
+            return value ? 1.0 : 0.0;
         }
     }
 
     enum NullValue implements JsonValue {
-        INSTANCE
+        INSTANCE;
+
+        @Override
+        public String asString() {
+            return "";
+        }
+
+        @Override
+        public int asInt() {
+            return 0;
+        }
+
+        @Override
+        public double asDouble() {
+            return 0.0;
+        }
+
+        @Override
+        public boolean asBoolean() {
+            return false;
+        }
     }
 }

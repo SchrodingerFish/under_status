@@ -17,21 +17,31 @@ import javax.xml.transform.stream.StreamSource;
  */
 public class XmlFormatter {
 
+    private static final java.util.regex.Pattern MINIFY_PATTERN = java.util.regex.Pattern.compile(">\\s+<");
+    private static final TransformerFactory TRANSFORMER_FACTORY;
+
+    static {
+        TransformerFactory tf = TransformerFactory.newInstance();
+        try {
+            tf.setAttribute(javax.xml.XMLConstants.ACCESS_EXTERNAL_DTD, "");
+            tf.setAttribute(javax.xml.XMLConstants.ACCESS_EXTERNAL_STYLESHEET, "");
+        } catch (Exception ignored) {}
+        TRANSFORMER_FACTORY = tf;
+    }
+
     public static String format(String xml) {
         if (xml == null || xml.trim().isEmpty()) {
             return "";
         }
         try {
             Source xmlInput = new StreamSource(new StringReader(xml));
-            StringWriter stringWriter = new StringWriter();
+            StringWriter stringWriter = new StringWriter(xml.length() * 3 / 2);
             StreamResult xmlOutput = new StreamResult(stringWriter);
             
-            TransformerFactory transformerFactory = TransformerFactory.newInstance();
-            // Restrict external access to prevent XXE vulnerabilities
-            transformerFactory.setAttribute(javax.xml.XMLConstants.ACCESS_EXTERNAL_DTD, "");
-            transformerFactory.setAttribute(javax.xml.XMLConstants.ACCESS_EXTERNAL_STYLESHEET, "");
-            
-            Transformer transformer = transformerFactory.newTransformer();
+            Transformer transformer;
+            synchronized (TRANSFORMER_FACTORY) {
+                transformer = TRANSFORMER_FACTORY.newTransformer();
+            }
             transformer.setOutputProperty(OutputKeys.INDENT, "yes");
             transformer.setOutputProperty("{http://xml.apache.org/xslt}indent-amount", "2");
             transformer.setOutputProperty(OutputKeys.OMIT_XML_DECLARATION, "no");
@@ -48,6 +58,6 @@ public class XmlFormatter {
             return "";
         }
         // Trim whitespaces between nested XML nodes
-        return xml.replaceAll(">\\s+<", "><").trim();
+        return MINIFY_PATTERN.matcher(xml).replaceAll("><").trim();
     }
 }

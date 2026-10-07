@@ -23,6 +23,19 @@ public class CommonUtils {
         }
     }
 
+    public static String getClipboardText() {
+        try {
+            java.awt.datatransfer.Clipboard clipboard = java.awt.Toolkit.getDefaultToolkit().getSystemClipboard();
+            java.awt.datatransfer.Transferable contents = clipboard.getContents(null);
+            if (contents != null && contents.isDataFlavorSupported(java.awt.datatransfer.DataFlavor.stringFlavor)) {
+                return (String) contents.getTransferData(java.awt.datatransfer.DataFlavor.stringFlavor);
+            }
+        } catch (Exception ex) {
+            java.util.logging.Logger.getLogger(CommonUtils.class.getName()).log(java.util.logging.Level.FINE, "Clipboard read failed", ex);
+        }
+        return "";
+    }
+
     public static String generateRandomString(int len) {
         String chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()_+";
         StringBuilder sb = new StringBuilder();

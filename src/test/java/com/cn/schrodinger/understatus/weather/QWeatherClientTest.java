@@ -2,6 +2,7 @@ package com.cn.schrodinger.understatus.weather;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.net.URI;
@@ -120,6 +121,74 @@ class QWeatherClientTest {
         assertEquals(12.5, result.pollutants().get("pm2p5"));
         assertEquals("QWeather Attribution", result.attributionTag());
         assertEquals("/airquality/v1/current/39.92/116.41", transport.uri.getPath());
+    }
+
+    @Test
+    void mapsAirQualityV7NowFormat() throws Exception {
+        RecordingTransport transport = new RecordingTransport();
+        transport.response = "{\"code\":\"200\",\"updateTime\":\"2026-10-07T14:00+08:00\","
+                + "\"now\":{\"pubTime\":\"2026-10-07T13:00+08:00\",\"aqi\":\"35\",\"level\":\"1\","
+                + "\"category\":\"优\",\"primary\":\"NA\",\"pm10\":\"32\",\"pm2p5\":\"15\","
+                + "\"no2\":\"10\",\"so2\":\"4\",\"co\":\"0.3\",\"o3\":\"65\"},"
+                + "\"refer\":{\"sources\":[\"中国环境监测总站\"],\"license\":[\"QWeather License\"]}}";
+
+        AirQualitySnapshot result = new QWeatherClient(transport)
+                .fetchAirQuality(CONFIG, BEIJING);
+
+        assertEquals(35, result.aqi());
+        assertEquals("优", result.category());
+        assertEquals("无", result.primaryPollutant());
+        assertEquals(15.0, result.pollutants().get("pm2p5"));
+        assertEquals(32.0, result.pollutants().get("pm10"));
+        assertEquals(0.3, result.pollutants().get("co"));
+        assertNotNull(result.updateTime());
+    }
+
+    @Test
+    void mapsAirQualityV1WithPrimaryPollutantObjectAndNumericValues() throws Exception {
+        RecordingTransport transport = new RecordingTransport();
+        transport.response = "{\"code\":200,\"metadata\":{\"tag\":\"QWeather Attribution\"},"
+                + "\"indexes\":[{\"code\":\"china-aqi\",\"name\":\"AQI\",\"aqi\":52,\"aqiDisplay\":\"52\","
+                + "\"level\":\"2\",\"category\":\"良\",\"color\":\"#FFFF00\","
+                + "\"primaryPollutant\":{\"code\":\"pm2p5\",\"name\":\"PM2.5\",\"fullName\":\"细颗粒物\"}}],"
+                + "\"pollutants\":[{\"code\":\"pm2p5\",\"name\":\"PM2.5\","
+                + "\"concentration\":{\"value\":35.5,\"unit\":\"μg/m3\"}},"
+                + "{\"code\":\"pm10\",\"name\":\"PM10\","
+                + "\"concentration\":{\"value\":50.0,\"unit\":\"μg/m3\"}}]}";
+
+        AirQualitySnapshot result = new QWeatherClient(transport)
+                .fetchAirQuality(CONFIG, BEIJING);
+
+        assertEquals(52, result.aqi());
+        assertEquals("良", result.category());
+        assertEquals("PM2.5", result.primaryPollutant());
+        assertEquals(35.5, result.pollutants().get("pm2p5"));
+        assertEquals(50.0, result.pollutants().get("pm10"));
+    }
+
+    @Test
+    void fallbacksToV7WhenV1Fails() throws Exception {
+        HttpTransport transport = new HttpTransport() {
+            @Override
+            public String get(URI uri) {
+                return get(uri, Map.of());
+            }
+
+            @Override
+            public String get(URI uri, Map<String, String> headers) {
+                if (uri.getPath().startsWith("/airquality/v1")) {
+                    return "{\"code\":\"403\"}";
+                }
+                return "{\"code\":\"200\",\"now\":{\"aqi\":\"38\",\"category\":\"优\",\"pm2p5\":\"12\"}}";
+            }
+        };
+
+        AirQualitySnapshot result = new QWeatherClient(transport)
+                .fetchAirQuality(CONFIG, BEIJING);
+
+        assertEquals(38, result.aqi());
+        assertEquals("优", result.category());
+        assertEquals(12.0, result.pollutants().get("pm2p5"));
     }
 
     @Test
