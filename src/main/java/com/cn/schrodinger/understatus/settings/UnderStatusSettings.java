@@ -13,6 +13,8 @@ public record UnderStatusSettings(
         boolean showToolbox,
         boolean showAlarms,
         boolean showWeather,
+        boolean showMusic,
+        String musicApiHost,
         String qweatherApiHost,
         String qweatherApiKey,
         String qweatherCity,
@@ -25,6 +27,7 @@ public record UnderStatusSettings(
                 ? SettingsRepository.DEFAULT_CLOCK_PATTERN : clockPattern;
         pomodoroWorkMinutes = Math.max(1, Math.min(180, pomodoroWorkMinutes));
         pomodoroBreakMinutes = Math.max(1, Math.min(60, pomodoroBreakMinutes));
+        musicApiHost = musicApiHost == null ? "" : musicApiHost.trim();
         qweatherApiHost = qweatherApiHost == null ? "" : qweatherApiHost.trim();
         qweatherApiKey = qweatherApiKey == null ? "" : qweatherApiKey.trim();
         qweatherCity = qweatherCity == null || qweatherCity.isBlank() ? "北京" : qweatherCity.trim();

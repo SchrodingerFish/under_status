@@ -45,11 +45,14 @@ class SettingsRepositoryTest {
 
         repository.save(new UnderStatusSettings(defaults.clockPattern(), 25, 5,
                 true, true, true, true, true, true, true, true, true,
-                "abc.def.qweatherapi.com", "secret", "上海", false, 800, 600));
+                true, "", "abc.def.qweatherapi.com", "secret", "上海", false, 800, 600));
 
         assertEquals("abc.def.qweatherapi.com", values.get("qweatherApiHost"));
         assertNull(values.get("qweatherApiKey"));
         assertFalse(values.containsKey("qweather" + "ProjectId"));
         assertEquals("secret", repository.load().qweatherApiKey());
+
+        repository.saveFavorites("test_favorites");
+        assertEquals("test_favorites", repository.loadFavorites());
     }
 }

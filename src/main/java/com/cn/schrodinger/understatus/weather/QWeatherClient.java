@@ -162,28 +162,198 @@ public final class QWeatherClient {
 
     public AirQualitySnapshot fetchAirQuality(QWeatherConfig config,
             LocationContext location) throws WeatherException {
-        String path = String.format(java.util.Locale.ROOT,
-                "/airquality/v1/current/%.2f/%.2f", location.latitude(), location.longitude());
-        JsonValue.ObjectValue root = request(config, path,
-                Map.of("lang", config.language()));
         try {
-            JsonValue.ObjectValue index = root.required("indexes").asArray().get(0).asObject();
+            // Attempt 1: Standard Global 1km Air Quality endpoint
+            String path = String.format(java.util.Locale.ROOT,
+                    "/airquality/v1/current/%.2f/%.2f", location.latitude(), location.longitude());
+            JsonValue.ObjectValue root = request(config, path, Map.of("lang", config.language()));
+            return parseAirQuality(root);
+        } catch (Exception v1Ex) {
+            // Attempt 2: Fallback to /v7/air/now China city endpoint
+            try {
+                JsonValue.ObjectValue root = request(config, "/v7/air/now",
+                        Map.of("location", location.locationId(), "lang", config.language()));
+                return parseAirQuality(root);
+            } catch (WeatherException fallbackEx) {
+                if (v1Ex instanceof WeatherException wEx && wEx.kind() == WeatherException.Kind.AUTHENTICATION) {
+                    throw wEx;
+                }
+                throw fallbackEx;
+            }
+        }
+    }
+
+    private static AirQualitySnapshot parseAirQuality(JsonValue.ObjectValue root) throws WeatherException {
+        // Case 1: Standard QWeather v7 format (contains "now" object)
+        if (root.optional("now").isPresent()) {
+            JsonValue.ObjectValue now = root.required("now").asObject();
+            int aqi = flexibleInt(now.optional("aqi").orElse(null));
+            String category = optionalText(now, "category");
+            String primary = extractPrimary(now);
+
             Map<String, Double> pollutants = new LinkedHashMap<>();
-            JsonValue pollutantValue = root.optional("pollutants").orElse(null);
-            if (pollutantValue != null) {
-                for (JsonValue value : pollutantValue.asArray()) {
-                    JsonValue.ObjectValue pollutant = value.asObject();
-                    JsonValue.ObjectValue concentration = requiredObject(pollutant, "concentration");
-                    pollutants.put(text(pollutant, "code"),
-                            concentration.required("value").asDouble());
+            addPollutant(pollutants, "pm2p5", now, "pm2p5");
+            addPollutant(pollutants, "pm10", now, "pm10");
+            addPollutant(pollutants, "o3", now, "o3");
+            addPollutant(pollutants, "no2", now, "no2");
+            addPollutant(pollutants, "so2", now, "so2");
+            addPollutant(pollutants, "co", now, "co");
+
+            OffsetDateTime time = offset(root, "updateTime");
+            if (time == null) {
+                time = offset(now, "pubTime");
+            }
+            if (time == null) {
+                time = OffsetDateTime.now();
+            }
+
+            return new AirQualitySnapshot(time, aqi, category, primary, pollutants,
+                    airAttribution(root), reference(root));
+        }
+
+        // Case 2: Global v1 format (contains "indexes" array)
+        if (root.optional("indexes").isPresent()) {
+            List<JsonValue> indexArray = root.required("indexes").asArray();
+            JsonValue.ObjectValue index = null;
+            for (JsonValue v : indexArray) {
+                if (v instanceof JsonValue.ObjectValue obj) {
+                    String code = optionalText(obj, "code");
+                    if ("china-aqi".equalsIgnoreCase(code) || "qaqi".equalsIgnoreCase(code) || "cn".equalsIgnoreCase(code)) {
+                        index = obj;
+                        break;
+                    }
                 }
             }
-            return new AirQualitySnapshot(offset(root, "updateTime"),
-                    flexibleInt(index.required("aqi")), optionalText(index, "category"),
-                    optionalText(index, "primaryPollutant"), pollutants,
+            if (index == null && !indexArray.isEmpty() && indexArray.get(0) instanceof JsonValue.ObjectValue first) {
+                index = first;
+            }
+
+            int aqi = 0;
+            String category = "";
+            String primary = "无";
+
+            if (index != null) {
+                JsonValue aqiVal = index.optional("aqi").isPresent()
+                        ? index.optional("aqi").get()
+                        : index.optional("aqiDisplay").orElse(null);
+                aqi = flexibleInt(aqiVal);
+                category = optionalText(index, "category");
+                primary = extractPrimary(index);
+            }
+
+            Map<String, Double> pollutants = new LinkedHashMap<>();
+            JsonValue pollutantValue = root.optional("pollutants").orElse(null);
+            if (pollutantValue != null && pollutantValue != JsonValue.NullValue.INSTANCE) {
+                for (JsonValue value : pollutantValue.asArray()) {
+                    if (value instanceof JsonValue.ObjectValue pollutant) {
+                        String code = optionalText(pollutant, "code").toLowerCase();
+                        if (code.isEmpty()) {
+                            continue;
+                        }
+                        JsonValue concVal = pollutant.optional("concentration").orElse(null);
+                        if (concVal instanceof JsonValue.ObjectValue concObj) {
+                            JsonValue v = concObj.optional("value").orElse(null);
+                            if (v != null && v != JsonValue.NullValue.INSTANCE) {
+                                pollutants.put(code, flexibleDouble(v));
+                            }
+                        } else if (concVal != null && concVal != JsonValue.NullValue.INSTANCE) {
+                            pollutants.put(code, flexibleDouble(concVal));
+                        } else {
+                            JsonValue v = pollutant.optional("value").orElse(null);
+                            if (v != null && v != JsonValue.NullValue.INSTANCE) {
+                                pollutants.put(code, flexibleDouble(v));
+                            }
+                        }
+                    }
+                }
+            }
+
+            OffsetDateTime time = offset(root, "updateTime");
+            if (time == null) {
+                time = OffsetDateTime.now();
+            }
+
+            return new AirQualitySnapshot(time, aqi, category, primary, pollutants,
                     airAttribution(root), reference(root));
-        } catch (IndexOutOfBoundsException | NumberFormatException ex) {
-            throw responseError(ex);
+        }
+
+        // Case 3: Flat object with aqi
+        if (root.optional("aqi").isPresent()) {
+            int aqi = flexibleInt(root.optional("aqi").orElse(null));
+            String category = optionalText(root, "category");
+            String primary = extractPrimary(root);
+            Map<String, Double> pollutants = new LinkedHashMap<>();
+            addPollutant(pollutants, "pm2p5", root, "pm2p5");
+            addPollutant(pollutants, "pm10", root, "pm10");
+            addPollutant(pollutants, "o3", root, "o3");
+            addPollutant(pollutants, "no2", root, "no2");
+            addPollutant(pollutants, "so2", root, "so2");
+            addPollutant(pollutants, "co", root, "co");
+            return new AirQualitySnapshot(OffsetDateTime.now(), aqi, category, primary, pollutants,
+                    airAttribution(root), reference(root));
+        }
+
+        throw new WeatherException(WeatherException.Kind.RESPONSE, "空气质量响应缺少 now 或 indexes 节点");
+    }
+
+    private static String extractPrimary(JsonValue.ObjectValue obj) {
+        JsonValue val = obj.optional("primaryPollutant")
+                .or(() -> obj.optional("primary"))
+                .orElse(null);
+        if (val == null || val == JsonValue.NullValue.INSTANCE) {
+            return "无";
+        }
+        if (val instanceof JsonValue.ObjectValue primaryObj) {
+            String name = optionalText(primaryObj, "name");
+            if (!name.isEmpty() && !"NA".equalsIgnoreCase(name) && !"none".equalsIgnoreCase(name)) {
+                return name;
+            }
+            String code = optionalText(primaryObj, "code");
+            if (!code.isEmpty() && !"NA".equalsIgnoreCase(code) && !"none".equalsIgnoreCase(code)) {
+                return code.toUpperCase();
+            }
+            String fullName = optionalText(primaryObj, "fullName");
+            if (!fullName.isEmpty()) {
+                return fullName;
+            }
+            return "无";
+        }
+        String text;
+        try {
+            text = val.asString().trim();
+        } catch (Exception ex) {
+            text = "";
+        }
+        if (text.isEmpty() || "NA".equalsIgnoreCase(text) || "none".equalsIgnoreCase(text) || "null".equalsIgnoreCase(text)) {
+            return "无";
+        }
+        return text;
+    }
+
+    private static double flexibleDouble(JsonValue value) {
+        if (value == null || value == JsonValue.NullValue.INSTANCE) {
+            return 0.0;
+        }
+        try {
+            return value.asDouble();
+        } catch (Exception ex) {
+            try {
+                String str = value.asString().trim();
+                return Double.parseDouble(str);
+            } catch (Exception ignored) {
+                return 0.0;
+            }
+        }
+    }
+
+    private static void addPollutant(Map<String, Double> map, String code,
+            JsonValue.ObjectValue now, String key) {
+        JsonValue v = now.optional(key).orElse(null);
+        if (v != null && v != JsonValue.NullValue.INSTANCE) {
+            try {
+                map.put(code, flexibleDouble(v));
+            } catch (Exception ignored) {
+            }
         }
     }
 
@@ -270,11 +440,19 @@ public final class QWeatherClient {
         return Map.of("location", location, "lang", config.language(), "unit", config.unit());
     }
 
-    private static int flexibleInt(JsonValue value) throws WeatherException {
+    private static int flexibleInt(JsonValue value) {
+        if (value == null || value == JsonValue.NullValue.INSTANCE) {
+            return 0;
+        }
         try {
             return value.asInt();
-        } catch (WeatherException ex) {
-            return Integer.parseInt(value.asString());
+        } catch (Exception ex) {
+            try {
+                String str = value.asString().trim();
+                return (int) Math.round(Double.parseDouble(str));
+            } catch (Exception ignored) {
+                return 0;
+            }
         }
     }
 
@@ -331,46 +509,83 @@ public final class QWeatherClient {
 
     private static String text(JsonValue.ObjectValue object, String key)
             throws WeatherException {
-        return object.required(key).asString();
+        JsonValue value = object.required(key);
+        try {
+            return value.asString();
+        } catch (Exception ex) {
+            return "";
+        }
     }
 
-    private static String optionalText(JsonValue.ObjectValue object, String key)
-            throws WeatherException {
+    private static String optionalText(JsonValue.ObjectValue object, String key) {
         JsonValue value = object.optional(key).orElse(null);
-        return value == null || value == JsonValue.NullValue.INSTANCE ? "" : value.asString();
+        if (value == null || value == JsonValue.NullValue.INSTANCE) {
+            return "";
+        }
+        try {
+            return value.asString();
+        } catch (Exception ex) {
+            return "";
+        }
     }
 
     private static int integer(JsonValue.ObjectValue object, String key)
             throws WeatherException {
-        return Integer.parseInt(text(object, key));
+        JsonValue value = object.required(key);
+        try {
+            return value.asInt();
+        } catch (Exception ex) {
+            return Integer.parseInt(text(object, key));
+        }
     }
 
     private static double decimal(JsonValue.ObjectValue object, String key)
             throws WeatherException {
-        return Double.parseDouble(text(object, key));
+        JsonValue value = object.required(key);
+        try {
+            return value.asDouble();
+        } catch (Exception ex) {
+            return Double.parseDouble(text(object, key));
+        }
     }
 
-    private static Integer optionalInteger(JsonValue.ObjectValue object, String key)
-            throws WeatherException {
+    private static Integer optionalInteger(JsonValue.ObjectValue object, String key) {
+        JsonValue value = object.optional(key).orElse(null);
+        if (value == null || value == JsonValue.NullValue.INSTANCE) {
+            return null;
+        }
+        try {
+            return value.asInt();
+        } catch (Exception ex) {
+            String valueStr = optionalText(object, key);
+            return valueStr.isEmpty() ? null : Integer.valueOf(valueStr);
+        }
+    }
+
+    private static OffsetDateTime offset(JsonValue.ObjectValue object, String key) {
         String value = optionalText(object, key);
-        return value.isEmpty() ? null : Integer.valueOf(value);
+        if (value.isEmpty()) {
+            return null;
+        }
+        try {
+            return OffsetDateTime.parse(value);
+        } catch (Exception ex) {
+            return null;
+        }
     }
 
-    private static OffsetDateTime offset(JsonValue.ObjectValue object, String key)
-            throws WeatherException {
-        String value = optionalText(object, key);
-        return value.isEmpty() ? null : OffsetDateTime.parse(value);
-    }
-
-    private static WeatherReference reference(JsonValue.ObjectValue root)
-            throws WeatherException {
+    private static WeatherReference reference(JsonValue.ObjectValue root) {
         JsonValue value = root.optional("refer").orElse(null);
         if (value == null || value == JsonValue.NullValue.INSTANCE) {
             return new WeatherReference(optionalText(root, "fxLink"), List.of(), List.of());
         }
-        JsonValue.ObjectValue refer = value.asObject();
-        return new WeatherReference(optionalText(root, "fxLink"),
-                strings(refer, "sources"), strings(refer, "license"));
+        try {
+            JsonValue.ObjectValue refer = value.asObject();
+            return new WeatherReference(optionalText(root, "fxLink"),
+                    strings(refer, "sources"), strings(refer, "license"));
+        } catch (Exception ex) {
+            return new WeatherReference(optionalText(root, "fxLink"), List.of(), List.of());
+        }
     }
 
     private static List<String> strings(JsonValue.ObjectValue object, String key)

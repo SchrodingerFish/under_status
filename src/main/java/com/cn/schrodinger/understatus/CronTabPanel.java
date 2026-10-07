@@ -60,6 +60,38 @@ public class CronTabPanel extends JPanel {
         gbc.gridx = 1; gbc.weightx = 1.0;
         headerPanel.add(cronField, gbc);
 
+        // Presets selector
+        gbc.gridx = 0; gbc.gridy = 1; gbc.weightx = 0.0;
+        headerPanel.add(new JLabel("常用预设:"), gbc);
+
+        String[] presets = {
+            "选择常用预设...",
+            "每 5 分钟 (0 */5 * * * ?)",
+            "每 10 分钟 (0 */10 * * * ?)",
+            "每 30 分钟 (0 */30 * * * ?)",
+            "每小时整点 (0 0 * * * ?)",
+            "每天上午 9 点 (0 0 9 * * ?)",
+            "每天中午 12 点 (0 0 12 * * ?)",
+            "每个工作日上午 9 点 (0 0 9 ? * MON-FRI)",
+            "每周一上午 10 点 (0 0 10 ? * MON)",
+            "每月 1 号凌晨 0 点 (0 0 0 1 * ?)"
+        };
+        javax.swing.JComboBox<String> presetCombo = new javax.swing.JComboBox<>(presets);
+        presetCombo.addActionListener(e -> {
+            int idx = presetCombo.getSelectedIndex();
+            if (idx == 1) cronField.setText("0 */5 * * * ?");
+            else if (idx == 2) cronField.setText("0 */10 * * * ?");
+            else if (idx == 3) cronField.setText("0 */30 * * * ?");
+            else if (idx == 4) cronField.setText("0 0 * * * ?");
+            else if (idx == 5) cronField.setText("0 0 9 * * ?");
+            else if (idx == 6) cronField.setText("0 0 12 * * ?");
+            else if (idx == 7) cronField.setText("0 0 9 ? * MON-FRI");
+            else if (idx == 8) cronField.setText("0 0 10 ? * MON");
+            else if (idx == 9) cronField.setText("0 0 0 1 * ?");
+        });
+        gbc.gridx = 1; gbc.weightx = 1.0;
+        headerPanel.add(presetCombo, gbc);
+
         add(headerPanel, BorderLayout.NORTH);
 
         // Center: Output Results
@@ -69,16 +101,24 @@ public class CronTabPanel extends JPanel {
         add(new JScrollPane(outputArea), BorderLayout.CENTER);
 
         // South: Control Bar
-        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
+        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        JButton pasteBtn = new JButton("📋 粘贴");
         JButton clearBtn = new JButton("清空");
         JButton copyBtn = new JButton("复制解析");
 
+        pasteBtn.addActionListener(e -> {
+            String clip = CommonUtils.getClipboardText();
+            if (clip != null && !clip.isBlank()) {
+                cronField.setText(clip.trim());
+            }
+        });
         clearBtn.addActionListener(e -> {
             cronField.setText("");
             outputArea.setText("");
         });
         copyBtn.addActionListener(e -> CommonUtils.copyToClipboard(outputArea.getText()));
 
+        buttonPanel.add(pasteBtn);
         buttonPanel.add(clearBtn);
         buttonPanel.add(copyBtn);
         add(buttonPanel, BorderLayout.SOUTH);

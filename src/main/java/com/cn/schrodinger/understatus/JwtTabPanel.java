@@ -25,7 +25,10 @@ public class JwtTabPanel extends JPanel {
     private JTextArea inputArea;
     private JTextArea outputArea;
 
+    private final javax.swing.Timer debounceTimer = new javax.swing.Timer(120, e -> runJwtDecode());
+
     public JwtTabPanel() {
+        debounceTimer.setRepeats(false);
         initComponents();
     }
 
@@ -40,11 +43,11 @@ public class JwtTabPanel extends JPanel {
         inputArea.setFont(UIManager.getFont("TextArea.font").deriveFont(11f));
         inputArea.getDocument().addDocumentListener(new DocumentListener() {
             @Override
-            public void insertUpdate(DocumentEvent e) { runJwtDecode(); }
+            public void insertUpdate(DocumentEvent e) { debounceTimer.restart(); }
             @Override
-            public void removeUpdate(DocumentEvent e) { runJwtDecode(); }
+            public void removeUpdate(DocumentEvent e) { debounceTimer.restart(); }
             @Override
-            public void changedUpdate(DocumentEvent e) { runJwtDecode(); }
+            public void changedUpdate(DocumentEvent e) { debounceTimer.restart(); }
         });
 
         JScrollPane inputScroll = new JScrollPane(inputArea);
@@ -58,16 +61,25 @@ public class JwtTabPanel extends JPanel {
         add(new JScrollPane(outputArea), BorderLayout.CENTER);
 
         // South: Control Bar
-        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
+        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        JButton pasteBtn = new JButton("📋 粘贴");
         JButton clearBtn = new JButton("清空");
         JButton copyBtn = new JButton("复制解码内容");
 
+        pasteBtn.addActionListener(e -> {
+            String clip = CommonUtils.getClipboardText();
+            if (clip != null && !clip.isBlank()) {
+                inputArea.setText(clip.trim());
+                runJwtDecode();
+            }
+        });
         clearBtn.addActionListener(e -> {
             inputArea.setText("");
             outputArea.setText("");
         });
         copyBtn.addActionListener(e -> CommonUtils.copyToClipboard(outputArea.getText()));
 
+        buttonPanel.add(pasteBtn);
         buttonPanel.add(clearBtn);
         buttonPanel.add(copyBtn);
         add(buttonPanel, BorderLayout.SOUTH);

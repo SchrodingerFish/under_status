@@ -47,8 +47,19 @@ public final class QWeatherService {
         List<com.cn.schrodinger.understatus.weather.HourlyForecast> forecasts =
                 DATA.hourly(config, location, 24, false).value();
         for (com.cn.schrodinger.understatus.weather.HourlyForecast forecast : forecasts) {
-            result.add(new HourlyForecast(forecast.time().format(TIME),
-                    forecast.temperatureCelsius(), forecast.condition()));
+            result.add(new HourlyForecast(
+                    forecast.time().format(TIME),
+                    forecast.time().format(DateTimeFormatter.ofPattern("MM-dd HH:mm")),
+                    forecast.temperatureCelsius(),
+                    forecast.condition(),
+                    forecast.humidityPercent(),
+                    forecast.precipitationMm(),
+                    forecast.windSpeedKph(),
+                    forecast.windDirection(),
+                    forecast.windScale(),
+                    forecast.pressureHpa(),
+                    forecast.precipitationProbability(),
+                    forecast.time().format(DateTimeFormatter.ofPattern("MM-dd"))));
         }
         return List.copyOf(result);
     }
@@ -67,14 +78,39 @@ public final class QWeatherService {
     }
 
     public static final class HourlyForecast {
-        public final String time;
-        public final int temp;
-        public final String text;
+        public final String time;             // "HH:mm"
+        public final String fullTime;         // "MM-dd HH:mm"
+        public final int temp;                // °C
+        public final String text;             // condition
+        public final int humidity;            // %
+        public final double precipitation;    // mm
+        public final int windSpeed;           // km/h
+        public final String windDirection;    // "东北风"
+        public final String windScale;        // "2级"
+        public final int pressure;            // hPa
+        public final Integer pop;             // 降水概率 %
+        public final String date;             // "MM-dd"
 
         public HourlyForecast(String time, int temp, String text) {
+            this(time, time, temp, text, 0, 0.0, 0, "", "", 0, null, "");
+        }
+
+        public HourlyForecast(String time, String fullTime, int temp, String text,
+                int humidity, double precipitation, int windSpeed,
+                String windDirection, String windScale, int pressure,
+                Integer pop, String date) {
             this.time = time;
+            this.fullTime = fullTime != null ? fullTime : time;
             this.temp = temp;
             this.text = text;
+            this.humidity = humidity;
+            this.precipitation = precipitation;
+            this.windSpeed = windSpeed;
+            this.windDirection = windDirection != null ? windDirection : "";
+            this.windScale = windScale != null ? windScale : "";
+            this.pressure = pressure;
+            this.pop = pop;
+            this.date = date != null ? date : "";
         }
     }
 }

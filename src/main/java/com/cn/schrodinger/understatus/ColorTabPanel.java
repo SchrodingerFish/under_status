@@ -1,10 +1,15 @@
 package com.cn.schrodinger.understatus;
 
+import java.awt.BorderLayout;
 import java.awt.Color;
+import java.awt.Cursor;
 import java.awt.Dimension;
+import java.awt.FlowLayout;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.JColorChooser;
@@ -12,10 +17,13 @@ import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
 
 /**
- * Color picker dialog panel integrating JColorChooser.
- * Keeps QuickNoteCalcDialog open by setting its pickingColor state flag.
+ * Modern bidirectional Color Picker & Converter tab panel.
+ * Supports real-time editing of Hex, RGB, and HSL values,
+ * JColorChooser integration, and a developer quick-palette swatch bar.
  *
  * @author peter/antigravity
  */
@@ -24,79 +32,256 @@ public class ColorTabPanel extends JPanel {
     private JPanel colorPreviewPanel;
     private JTextField hexField;
     private JTextField rgbField;
+    private JTextField hslField;
+    private JLabel statusLabel;
+
+    private boolean isUpdating = false;
+
+    private static final String[][] PALETTE_SWATCHES = {
+        {"#3B82F6", "科技蓝 (Primary Blue)"},
+        {"#10B981", "翡翠绿 (Emerald Green)"},
+        {"#F59E0B", "琥珀黄 (Amber Warning)"},
+        {"#EF4444", "珊瑚红 (Rose Red)"},
+        {"#8B5CF6", "创意紫 (Violet Purple)"},
+        {"#06B6D4", "极光青 (Aurora Cyan)"},
+        {"#64748B", "石板灰 (Slate Gray)"},
+        {"#1E293B", "暗夜深蓝 (Navy Dark)"},
+        {"#FFFFFF", "纯净白 (Clean White)"},
+        {"#000000", "极夜黑 (Clean Black)"}
+    };
 
     public ColorTabPanel() {
         initComponents();
+        applyColor(new Color(59, 130, 246), true, true, true);
     }
 
     private void initComponents() {
-        setLayout(new GridBagLayout());
-        setBorder(BorderFactory.createEmptyBorder(15, 15, 15, 15));
+        setLayout(new BorderLayout(10, 10));
+        setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
+
+        // Center Container
+        JPanel centerPanel = new JPanel(new GridBagLayout());
         GridBagConstraints gbc = new GridBagConstraints();
         gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.insets = new Insets(8, 8, 8, 8);
+        gbc.insets = new Insets(5, 5, 5, 5);
 
-        JButton pickBtn = new JButton("🎨 开启调色盘选择颜色 (Pick Color)");
+        // Row 0: Palette Swatches header
+        JPanel swatchesBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 2));
+        swatchesBar.setBorder(BorderFactory.createTitledBorder("常用开发色彩预设 (Quick Palette)"));
+
+        for (String[] swatch : PALETTE_SWATCHES) {
+            Color c = parseHex(swatch[0]);
+            JPanel tile = new JPanel();
+            tile.setPreferredSize(new Dimension(24, 24));
+            tile.setBackground(c);
+            tile.setToolTipText(swatch[0] + " - " + swatch[1]);
+            tile.setBorder(BorderFactory.createLineBorder(Color.GRAY, 1));
+            tile.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+            tile.addMouseListener(new MouseAdapter() {
+                @Override
+                public void mouseClicked(MouseEvent e) {
+                    applyColor(c, true, true, true);
+                    CommonUtils.copyToClipboard(swatch[0]);
+                }
+            });
+            swatchesBar.add(tile);
+        }
+        gbc.gridx = 0; gbc.gridy = 0; gbc.gridwidth = 3;
+        centerPanel.add(swatchesBar, gbc);
+
+        // Row 1: Pick Button & Preview block
+        JButton pickBtn = new JButton("🎨 打开调色盘 (Choose Color)");
         pickBtn.setFont(pickBtn.getFont().deriveFont(12f));
         pickBtn.addActionListener(e -> triggerColorPicker());
-        gbc.gridx = 0; gbc.gridy = 0; gbc.gridwidth = 3;
-        add(pickBtn, gbc);
+        gbc.gridy = 1; gbc.gridx = 0; gbc.gridwidth = 1;
+        centerPanel.add(pickBtn, gbc);
 
-        gbc.gridy = 1; gbc.gridwidth = 1;
-        add(new JLabel("选中色块 (Preview):"), gbc);
-        
         colorPreviewPanel = new JPanel();
-        colorPreviewPanel.setBackground(Color.LIGHT_GRAY);
-        colorPreviewPanel.setBorder(BorderFactory.createLineBorder(Color.GRAY, 1));
-        colorPreviewPanel.setPreferredSize(new Dimension(80, 25));
+        colorPreviewPanel.setBackground(new Color(59, 130, 246));
+        colorPreviewPanel.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(new Color(120, 140, 160), 1),
+                BorderFactory.createEmptyBorder(6, 12, 6, 12)
+        ));
+        colorPreviewPanel.setPreferredSize(new Dimension(100, 32));
         gbc.gridx = 1; gbc.gridwidth = 2;
-        add(colorPreviewPanel, gbc);
+        centerPanel.add(colorPreviewPanel, gbc);
 
+        // Row 2: Hex Field (Editable)
         gbc.gridy = 2; gbc.gridx = 0; gbc.gridwidth = 1;
-        add(new JLabel("十六进制 (Hex):"), gbc);
-        hexField = new JTextField("#D3D3D3", 8);
-        hexField.setEditable(false);
-        gbc.gridx = 1;
-        add(hexField, gbc);
+        centerPanel.add(new JLabel("十六进制 (Hex):"), gbc);
+
+        hexField = new JTextField("#3B82F6", 10);
+        hexField.getDocument().addDocumentListener(new DocumentListener() {
+            @Override public void insertUpdate(DocumentEvent e) { onHexChanged(); }
+            @Override public void removeUpdate(DocumentEvent e) { onHexChanged(); }
+            @Override public void changedUpdate(DocumentEvent e) { onHexChanged(); }
+        });
+        gbc.gridx = 1; gbc.weightx = 1.0;
+        centerPanel.add(hexField, gbc);
 
         JButton copyHexBtn = new JButton("复制");
         copyHexBtn.addActionListener(e -> CommonUtils.copyToClipboard(hexField.getText()));
-        gbc.gridx = 2;
-        add(copyHexBtn, gbc);
+        gbc.gridx = 2; gbc.weightx = 0.0;
+        centerPanel.add(copyHexBtn, gbc);
 
+        // Row 3: RGB Field (Editable)
         gbc.gridy = 3; gbc.gridx = 0;
-        add(new JLabel("三原色 (RGB):"), gbc);
-        rgbField = new JTextField("211, 211, 211", 8);
-        rgbField.setEditable(false);
-        gbc.gridx = 1;
-        add(rgbField, gbc);
+        centerPanel.add(new JLabel("三原色 (RGB):"), gbc);
+
+        rgbField = new JTextField("59, 130, 246", 10);
+        rgbField.getDocument().addDocumentListener(new DocumentListener() {
+            @Override public void insertUpdate(DocumentEvent e) { onRgbChanged(); }
+            @Override public void removeUpdate(DocumentEvent e) { onRgbChanged(); }
+            @Override public void changedUpdate(DocumentEvent e) { onRgbChanged(); }
+        });
+        gbc.gridx = 1; gbc.weightx = 1.0;
+        centerPanel.add(rgbField, gbc);
 
         JButton copyRgbBtn = new JButton("复制");
         copyRgbBtn.addActionListener(e -> CommonUtils.copyToClipboard(rgbField.getText()));
-        gbc.gridx = 2;
-        add(copyRgbBtn, gbc);
+        gbc.gridx = 2; gbc.weightx = 0.0;
+        centerPanel.add(copyRgbBtn, gbc);
+
+        // Row 4: HSL Field
+        gbc.gridy = 4; gbc.gridx = 0;
+        centerPanel.add(new JLabel("色相/饱和度 (HSL):"), gbc);
+
+        hslField = new JTextField("hsl(217, 91%, 60%)", 10);
+        hslField.setEditable(false);
+        gbc.gridx = 1; gbc.weightx = 1.0;
+        centerPanel.add(hslField, gbc);
+
+        JButton copyHslBtn = new JButton("复制");
+        copyHslBtn.addActionListener(e -> CommonUtils.copyToClipboard(hslField.getText()));
+        gbc.gridx = 2; gbc.weightx = 0.0;
+        centerPanel.add(copyHslBtn, gbc);
+
+        // Row 5: Status hint
+        statusLabel = new JLabel("支持输入或粘贴 Hex 与 RGB 颜色代码，双向自动同步。");
+        statusLabel.setFont(statusLabel.getFont().deriveFont(11f));
+        statusLabel.setForeground(new Color(110, 130, 150));
+        gbc.gridy = 5; gbc.gridx = 0; gbc.gridwidth = 3;
+        centerPanel.add(statusLabel, gbc);
+
+        add(centerPanel, BorderLayout.CENTER);
+    }
+
+    private void onHexChanged() {
+        if (isUpdating) return;
+        String text = hexField.getText().trim();
+        Color c = parseHex(text);
+        if (c != null) {
+            applyColor(c, false, true, true);
+            statusLabel.setText("Hex 解析有效");
+            statusLabel.setForeground(new Color(40, 160, 80));
+        }
+    }
+
+    private void onRgbChanged() {
+        if (isUpdating) return;
+        String text = rgbField.getText().trim();
+        Color c = parseRgb(text);
+        if (c != null) {
+            applyColor(c, true, false, true);
+            statusLabel.setText("RGB 解析有效");
+            statusLabel.setForeground(new Color(40, 160, 80));
+        }
+    }
+
+    private void applyColor(Color c, boolean updateHex, boolean updateRgb, boolean updateHsl) {
+        if (c == null) return;
+        isUpdating = true;
+        try {
+            colorPreviewPanel.setBackground(c);
+            if (updateHex) {
+                hexField.setText(String.format("#%02X%02X%02X", c.getRed(), c.getGreen(), c.getBlue()));
+            }
+            if (updateRgb) {
+                rgbField.setText(String.format("%d, %d, %d", c.getRed(), c.getGreen(), c.getBlue()));
+            }
+            if (updateHsl) {
+                hslField.setText(formatHsl(c));
+            }
+        } finally {
+            isUpdating = false;
+        }
+    }
+
+    private static String formatHsl(Color c) {
+        float r = c.getRed() / 255f;
+        float g = c.getGreen() / 255f;
+        float b = c.getBlue() / 255f;
+
+        float max = Math.max(r, Math.max(g, b));
+        float min = Math.min(r, Math.min(g, b));
+        float h = 0f, s = 0f, l = (max + min) / 2f;
+
+        if (max != min) {
+            float d = max - min;
+            s = l > 0.5f ? d / (2f - max - min) : d / (max + min);
+            if (max == r) {
+                h = (g - b) / d + (g < b ? 6f : 0f);
+            } else if (max == g) {
+                h = (b - r) / d + 2f;
+            } else {
+                h = (r - g) / d + 4f;
+            }
+            h /= 6f;
+        }
+
+        return String.format("hsl(%d, %d%%, %d%%)", Math.round(h * 360f), Math.round(s * 100f), Math.round(l * 100f));
+    }
+
+    private static Color parseHex(String text) {
+        if (text == null) return null;
+        String clean = text.trim().replace("#", "");
+        if (clean.length() == 3) {
+            clean = "" + clean.charAt(0) + clean.charAt(0)
+                       + clean.charAt(1) + clean.charAt(1)
+                       + clean.charAt(2) + clean.charAt(2);
+        }
+        if (clean.length() == 6) {
+            try {
+                int r = Integer.parseInt(clean.substring(0, 2), 16);
+                int g = Integer.parseInt(clean.substring(2, 4), 16);
+                int b = Integer.parseInt(clean.substring(4, 6), 16);
+                return new Color(r, g, b);
+            } catch (NumberFormatException ignored) {}
+        }
+        return null;
+    }
+
+    private static Color parseRgb(String text) {
+        if (text == null) return null;
+        String clean = text.trim().replaceAll("(?i)rgb[a]?\\(", "").replace(")", "");
+        String[] parts = clean.split("[,\\s]+");
+        if (parts.length >= 3) {
+            try {
+                int r = Math.max(0, Math.min(255, Integer.parseInt(parts[0])));
+                int g = Math.max(0, Math.min(255, Integer.parseInt(parts[1])));
+                int b = Math.max(0, Math.min(255, Integer.parseInt(parts[2])));
+                return new Color(r, g, b);
+            } catch (NumberFormatException ignored) {}
+        }
+        return null;
     }
 
     private void triggerColorPicker() {
         Color initialColor = colorPreviewPanel.getBackground();
         java.awt.Window parent = SwingUtilities.getWindowAncestor(this);
-        
-        if (parent instanceof QuickNoteCalcDialog) {
-            ((QuickNoteCalcDialog) parent).isPickingColor = true;
+
+        if (parent instanceof QuickNoteCalcDialog dlg) {
+            dlg.isPickingColor = true;
         }
-        
+
         try {
             Color selectedColor = JColorChooser.showDialog(this, "选择颜色 (Choose Color)", initialColor);
             if (selectedColor != null) {
-                colorPreviewPanel.setBackground(selectedColor);
-                String hex = String.format("#%02X%02X%02X", selectedColor.getRed(), selectedColor.getGreen(), selectedColor.getBlue());
-                String rgb = String.format("%d, %d, %d", selectedColor.getRed(), selectedColor.getGreen(), selectedColor.getBlue());
-                hexField.setText(hex);
-                rgbField.setText(rgb);
+                applyColor(selectedColor, true, true, true);
             }
         } finally {
-            if (parent instanceof QuickNoteCalcDialog) {
-                ((QuickNoteCalcDialog) parent).isPickingColor = false;
+            if (parent instanceof QuickNoteCalcDialog dlg) {
+                dlg.isPickingColor = false;
             }
         }
     }
