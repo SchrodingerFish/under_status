@@ -5,23 +5,34 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.LinkedHashMap;
 
 public final class WeatherCache {
 
     private final Clock clock;
-    private final Map<WeatherCacheKey, Entry> entries = new ConcurrentHashMap<>();
+    private final Map<WeatherCacheKey, Entry> entries = new LinkedHashMap<>(16, 0.75f, true);
+    private long generation;
+    private static final Duration STALE_RETENTION = Duration.ofHours(6);
 
     public WeatherCache() { this(Clock.systemUTC()); }
 
     WeatherCache(Clock clock) { this.clock = clock; }
 
-    public <T> void put(WeatherCacheKey key, T value, Duration ttl) {
+    public synchronized <T> void put(WeatherCacheKey key, T value, Duration ttl) {
+        entries.entrySet().removeIf(entry -> expired(entry.getValue()));
         entries.put(key, new Entry(value, clock.instant().plus(ttl)));
+        while (entries.size() > 128) entries.remove(entries.keySet().iterator().next());
     }
 
-    public <T> Optional<CachedValue<T>> get(WeatherCacheKey key, Class<T> type) {
+    public synchronized long generation() { return generation; }
+    public synchronized <T> void putIfCurrent(long expected, WeatherCacheKey key, T value, Duration ttl) {
+        if (expected == generation) put(key, value, ttl);
+    }
+    private boolean expired(Entry entry) { return !clock.instant().isBefore(entry.expiresAt().plus(STALE_RETENTION)); }
+
+    public synchronized <T> Optional<CachedValue<T>> get(WeatherCacheKey key, Class<T> type) {
         Entry entry = entries.get(key);
+        if (entry != null && expired(entry)) { entries.remove(key); return Optional.empty(); }
         if (entry == null || !type.isInstance(entry.value())) {
             return Optional.empty();
         }
@@ -29,13 +40,14 @@ public final class WeatherCache {
                 !clock.instant().isBefore(entry.expiresAt())));
     }
 
-    public void remove(WeatherCacheKey key) { entries.remove(key); }
+    public synchronized void remove(WeatherCacheKey key) { generation++; entries.remove(key); }
 
-    public void clearLocation(String location) {
+    public synchronized void clearLocation(String location) {
+        generation++;
         entries.keySet().removeIf(key -> key.location().equals(location));
     }
 
-    public void clear() { entries.clear(); }
+    public synchronized void clear() { generation++; entries.clear(); }
 
     public record CachedValue<T>(T value, boolean stale) {}
 

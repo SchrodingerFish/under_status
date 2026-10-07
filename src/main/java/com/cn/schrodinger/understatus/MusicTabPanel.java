@@ -71,8 +71,14 @@ public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerList
     private static final RequestProcessor ASYNC_WORKER = new RequestProcessor("MusicTabPanel Worker", 4, true);
 
     // API & Player Engine
-    private final MusicApiClient apiClient = new MusicApiClient();
-    private final MusicAudioPlayer audioPlayer = new MusicAudioPlayer();
+    private final MusicApiClient apiClient;
+    private final MusicAudioPlayer audioPlayer;
+    private final SettingsRepository settingsRepository;
+    private final java.util.concurrent.Executor asyncWorker;
+    private final com.cn.schrodinger.understatus.statusbar.RequestGeneration playbackRequests = new com.cn.schrodinger.understatus.statusbar.RequestGeneration();
+    private final com.cn.schrodinger.understatus.statusbar.RequestGeneration searchRequests = new com.cn.schrodinger.understatus.statusbar.RequestGeneration();
+    private boolean closed;
+    private boolean favoritesLoadFailed;
     private final Random random = new Random();
 
     // Data lists & Cache
@@ -126,9 +132,18 @@ public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerList
     private JProgressBar progressBar;
 
     public MusicTabPanel() {
+        this(new MusicApiClient(), new MusicAudioPlayer(), SettingsRepository.getDefault(), ASYNC_WORKER);
+    }
+
+    MusicTabPanel(MusicApiClient apiClient, MusicAudioPlayer audioPlayer, SettingsRepository settingsRepository,
+            java.util.concurrent.Executor asyncWorker) {
+        this.apiClient = apiClient;
+        this.audioPlayer = audioPlayer;
+        this.settingsRepository = settingsRepository;
+        this.asyncWorker = asyncWorker;
         audioPlayer.setListener(this);
-        loadFavoritesFromPreferences();
         initComponents();
+        loadFavoritesFromPreferences();
         updateFavoritesTable();
     }
 
@@ -491,6 +506,8 @@ public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerList
     }
 
     private void performSearch() {
+        if (closed) return;
+        long request = searchRequests.next();
         String kw = searchTextField.getText().trim();
         if (kw.isBlank()) {
             return;
@@ -503,10 +520,12 @@ public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerList
         searchResults.clear();
         searchTableModel.setRowCount(0);
 
-        ASYNC_WORKER.post(() -> {
+        asyncWorker.execute(() -> {
             try {
                 List<MusicSong> list = apiClient.search(kw, source, 30);
                 SwingUtilities.invokeLater(() -> {
+                    if (closed || !searchRequests.isCurrent(request)) return;
+                    searchResults.clear();
                     searchResults.addAll(list);
                     updateSearchTable();
                     searchStatusLabel.setText("✅ 找到 " + list.size() + " 首相关歌曲");
@@ -515,6 +534,7 @@ public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerList
             } catch (Exception ex) {
                 LOGGER.log(Level.WARNING, "Music search failed", ex);
                 SwingUtilities.invokeLater(() -> {
+                    if (closed || !searchRequests.isCurrent(request)) return;
                     searchStatusLabel.setText("❌ 搜索失败: " + ex.getMessage());
                     searchButton.setEnabled(true);
                 });
@@ -582,8 +602,12 @@ public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerList
         playSong(song);
     }
 
-    private void playSong(MusicSong song) {
-        if (song == null) return;
+    void playSong(MusicSong song) {
+        if (song == null || closed) return;
+        long request = playbackRequests.next();
+        audioPlayer.stop();
+        currentLyrics = List.of();
+        updateLyricList(currentLyrics);
 
         songTitleLabel.setText(song.getName());
         songArtistLabel.setText(song.getArtist() + " · " + song.getSourceDisplayName());
@@ -598,7 +622,7 @@ public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerList
         searchStatusLabel.setText("▶️ 正在播放: " + song.getName());
 
         // 1. Instantly resolve audio URL and start playback
-        ASYNC_WORKER.post(() -> {
+        asyncWorker.execute(() -> {
             try {
                 String audioUrl = song.getUrl();
                 if (audioUrl == null || audioUrl.isBlank()) {
@@ -606,23 +630,27 @@ public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerList
                     song.setUrl(audioUrl);
                 }
                 final String finalAudioUrl = audioUrl;
-                SwingUtilities.invokeLater(() -> audioPlayer.play(song, finalAudioUrl));
+                SwingUtilities.invokeLater(() -> {
+                    if (!closed && playbackRequests.isCurrent(request)) audioPlayer.play(song, finalAudioUrl);
+                });
             } catch (Exception ex) {
                 LOGGER.log(Level.WARNING, "Failed to resolve song play URL", ex);
-                SwingUtilities.invokeLater(() -> searchStatusLabel.setText("❌ 无法解析曲目播放链接: " + ex.getMessage()));
+                SwingUtilities.invokeLater(() -> {
+                    if (!closed && playbackRequests.isCurrent(request)) searchStatusLabel.setText("❌ 无法解析曲目播放链接: " + ex.getMessage());
+                });
             }
         });
 
         // 2. Fetch album cover asynchronously
         if (song.getPicUrl() != null && !song.getPicUrl().isBlank()) {
-            loadCoverImage(song.getPicUrl());
+            loadCoverImage(song.getPicUrl(), request);
         } else {
-            ASYNC_WORKER.post(() -> {
+            asyncWorker.execute(() -> {
                 try {
                     String picUrl = apiClient.fetchPicUrl(song.getId(), song.getSource());
                     if (!picUrl.isBlank()) {
                         song.setPicUrl(picUrl);
-                        SwingUtilities.invokeLater(() -> loadCoverImage(picUrl));
+                        SwingUtilities.invokeLater(() -> loadCoverImage(picUrl, request));
                     }
                 } catch (Exception ex) {
                     LOGGER.log(Level.FINE, "Failed to fetch album cover URL", ex);
@@ -636,7 +664,7 @@ public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerList
             currentLyrics = lyricCache.get(songKey);
             updateLyricList(currentLyrics);
         } else {
-            ASYNC_WORKER.post(() -> {
+            asyncWorker.execute(() -> {
                 try {
                     String lrc = song.getLyric();
                     if (lrc == null || lrc.isBlank() || isNumeric(lrc)) {
@@ -644,9 +672,10 @@ public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerList
                         song.setLyric(lrc);
                     }
                     List<LrcParser.LrcLine> lrcLines = LrcParser.parse(lrc);
+                    if (lyricCache.size() >= 128) lyricCache.clear();
                     lyricCache.put(songKey, lrcLines);
                     SwingUtilities.invokeLater(() -> {
-                        if (song.equals(audioPlayer.getCurrentSong())) {
+                        if (!closed && playbackRequests.isCurrent(request)) {
                             currentLyrics = lrcLines;
                             updateLyricList(lrcLines);
                         }
@@ -658,7 +687,8 @@ public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerList
         }
     }
 
-    private void loadCoverImage(String picUrl) {
+    private void loadCoverImage(String picUrl, long request) {
+        if (closed || !playbackRequests.isCurrent(request)) return;
         if (picUrl == null || picUrl.isBlank()) {
             coverLabel.setIcon(null);
             coverLabel.setText("🎵");
@@ -671,7 +701,7 @@ public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerList
             return;
         }
 
-        ASYNC_WORKER.post(() -> {
+        asyncWorker.execute(() -> {
             try {
                 URL url = URI.create(picUrl).toURL();
                 HttpURLConnection conn = (HttpURLConnection) url.openConnection();
@@ -681,17 +711,32 @@ public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerList
                 conn.setReadTimeout(5000);
 
                 try (InputStream in = conn.getInputStream()) {
-                    Image img = ImageIO.read(in);
+                    byte[] bytes = BoundedInput.read(in, 4 * 1024 * 1024);
+                    Image img;
+                    try (var imageInput = ImageIO.createImageInputStream(new java.io.ByteArrayInputStream(bytes))) {
+                        var readers = ImageIO.getImageReaders(imageInput);
+                        if (!readers.hasNext()) return;
+                        var reader = readers.next();
+                        try {
+                            reader.setInput(imageInput);
+                            if ((long) reader.getWidth(0) * reader.getHeight(0) > 16_000_000) {
+                                throw new java.io.IOException("封面图片尺寸过大");
+                            }
+                            img = reader.read(0);
+                        } finally { reader.dispose(); }
+                    }
                     if (img != null) {
                         Image scaled = img.getScaledInstance(42, 42, Image.SCALE_SMOOTH);
                         ImageIcon icon = new ImageIcon(scaled);
+                        if (coverCache.size() >= 128) coverCache.clear();
                         coverCache.put(picUrl, icon);
                         SwingUtilities.invokeLater(() -> {
+                            if (closed || !playbackRequests.isCurrent(request)) return;
                             coverLabel.setText("");
                             coverLabel.setIcon(icon);
                         });
                     }
-                }
+                } finally { conn.disconnect(); }
             } catch (Exception ex) {
                 LOGGER.log(Level.FINE, "Failed to load album cover image", ex);
             }
@@ -752,7 +797,7 @@ public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerList
     }
 
     private void toggleFavorite(MusicSong song) {
-        if (song == null) return;
+        if (song == null || favoritesLoadFailed) return;
         if (favorites.contains(song)) {
             favorites.remove(song);
             if (song.equals(audioPlayer.getCurrentSong())) {
@@ -769,14 +814,32 @@ public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerList
     }
 
     private void loadFavoritesFromPreferences() {
-        String data = SettingsRepository.getDefault().loadFavorites();
-        favorites.clear();
-        favorites.addAll(MusicSong.deserializeList(data));
+        try {
+            String data = settingsRepository.loadFavorites();
+            favorites.clear();
+            favorites.addAll(MusicSong.deserializeList(data));
+        } catch (RuntimeException ex) {
+            favoritesLoadFailed = true;
+            searchStatusLabel.setText("收藏读取失败，已保护原文件: " + ex.getMessage());
+        }
     }
 
     private void saveFavoritesToPreferences() {
         String data = MusicSong.serializeList(favorites);
-        SettingsRepository.getDefault().saveFavorites(data);
+        try { settingsRepository.saveFavorites(data); }
+        catch (RuntimeException ex) {
+            JOptionPane.showMessageDialog(this, ex.getMessage(), "收藏保存失败", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    public void close() {
+        if (closed) return;
+        closed = true;
+        playbackRequests.next();
+        searchRequests.next();
+        audioPlayer.close();
+        coverCache.clear();
+        lyricCache.clear();
     }
 
     // AudioPlayer Listener Callbacks

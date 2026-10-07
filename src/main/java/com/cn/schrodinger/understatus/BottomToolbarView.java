@@ -102,8 +102,9 @@ public class BottomToolbarView extends JPanel {
     private String cachedWeatherText = "";
     private boolean isFetchingWeather = false;
     private Timer updateTimer;
-    private final RequestProcessor weatherProcessor = new RequestProcessor("UnderStatus Weather", 1, true);
-    private final LatestTask<String> weatherTask = new LatestTask<>(weatherProcessor);
+    private RequestProcessor weatherProcessor = new RequestProcessor("UnderStatus Weather", 1, true);
+    private LatestTask<String> weatherTask = new LatestTask<>(weatherProcessor);
+    private boolean resourcesStopped;
     private final EditorMetricsTracker metricsTracker = new EditorMetricsTracker(this::applyEditorMetrics);
 
     public BottomToolbarView() {
@@ -329,9 +330,7 @@ public class BottomToolbarView extends JPanel {
             }
 
             // 3. Update Pomodoro
-            if (showPomodoro) {
-                tickPomodoro();
-            }
+            tickPomodoro();
 
             // 4. Update Read-only status
             if (showReadOnly) {
@@ -351,15 +350,16 @@ public class BottomToolbarView extends JPanel {
     }
 
     private void refreshWeather(boolean force) {
-        if (!showWeather) {
+        if (resourcesStopped || !showWeather) {
             return;
         }
         if (qweatherApiHost.isBlank() || qweatherApiKey.isBlank()) {
             cachedWeatherText = "";
+            boolean changed = !"🌤 天气：待配置".equals(weatherLabel.getText());
             weatherLabel.setText("🌤 天气：待配置");
             weatherLabel.setToolTipText("点击配置和风天气 API Host 和 API Key");
             isFetchingWeather = false;
-            rebuildToolbarLayout();
+            if (changed) rebuildToolbarLayout();
             return;
         }
 
@@ -405,11 +405,25 @@ public class BottomToolbarView extends JPanel {
 
     @Override
     public void removeNotify() {
+        resourcesStopped = true;
         if (updateTimer != null) updateTimer.stop();
         weatherTask.close();
         weatherProcessor.stop();
         metricsTracker.close();
         super.removeNotify();
+    }
+
+    @Override public void addNotify() {
+        super.addNotify();
+        if (resourcesStopped) {
+            weatherProcessor = new RequestProcessor("UnderStatus Weather", 1, true);
+            weatherTask = new LatestTask<>(weatherProcessor);
+            resourcesStopped = false;
+            isFetchingWeather = false;
+            lastWeatherUpdate = 0;
+            updateTimer.start();
+            metricsTracker.start();
+        }
     }
 
     private void updateMemoryInfo() {
@@ -637,9 +651,13 @@ public class BottomToolbarView extends JPanel {
         updatePomodoroText();
 
         // 3. Alarms
-        String serializedAlarms = settingsRepository.loadAlarms();
-        alarms.clear();
-        alarms.addAll(Alarm.deserializeList(serializedAlarms));
+        try {
+            String serializedAlarms = settingsRepository.loadAlarms();
+            alarms.clear();
+            alarms.addAll(Alarm.deserializeList(serializedAlarms));
+        } catch (RuntimeException ex) {
+            org.openide.awt.StatusDisplayer.getDefault().setStatusText("闹钟读取失败，保留当前状态: " + ex.getMessage());
+        }
         updateAlarmButtonText();
 
         // 4. Component Visibilities
@@ -673,8 +691,12 @@ public class BottomToolbarView extends JPanel {
                 || !java.util.Objects.equals(previousCity, qweatherCity)
                 || previousAutoIp != qweatherAutoIp) {
             QWeatherService.clearCache();
+            weatherTask.invalidate();
+            isFetchingWeather = false;
         }
         if (!weatherState.visible()) {
+            weatherTask.invalidate();
+            isFetchingWeather = false;
             lastWeatherUpdate = 0;
             cachedWeatherText = "";
             weatherLabel.setText("");
@@ -790,7 +812,10 @@ public class BottomToolbarView extends JPanel {
     }
 
     private void saveAlarmsToPreferences() {
-        SettingsRepository.getDefault().saveAlarms(Alarm.serializeList(alarms));
+        try { SettingsRepository.getDefault().saveAlarms(Alarm.serializeList(alarms)); }
+        catch (RuntimeException ex) {
+            org.openide.awt.StatusDisplayer.getDefault().setStatusText("闹钟保存失败: " + ex.getMessage());
+        }
         updateAlarmButtonText();
     }
 

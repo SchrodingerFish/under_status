@@ -16,7 +16,7 @@ public final class JdkHttpTransport implements HttpTransport {
 
     private final HttpClient client = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(5))
-            .followRedirects(HttpClient.Redirect.NORMAL)
+            .followRedirects(HttpClient.Redirect.NEVER)
             .build();
 
     @Override
@@ -29,7 +29,7 @@ public final class JdkHttpTransport implements HttpTransport {
         HttpRequest request = buildRequest(uri, headers);
         try {
             HttpResponse<byte[]> response = client.send(
-                    request, HttpResponse.BodyHandlers.ofByteArray());
+                    request, info -> new LimitedBody());
             String encoding = response.headers().firstValue("Content-Encoding").orElse("");
             String body = decodeBody(response.body(), encoding);
             requireSuccess(response.statusCode(), body);
@@ -70,10 +70,33 @@ public final class JdkHttpTransport implements HttpTransport {
         if (contentEncoding != null
                 && contentEncoding.toLowerCase(java.util.Locale.ROOT).contains("gzip")) {
             try (GZIPInputStream input = new GZIPInputStream(new ByteArrayInputStream(body))) {
-                decoded = input.readAllBytes();
+                decoded = com.cn.schrodinger.understatus.BoundedInput.read(input, 2 * 1024 * 1024);
             }
         }
         return new String(decoded, StandardCharsets.UTF_8);
+    }
+
+    private static final class LimitedBody implements HttpResponse.BodySubscriber<byte[]> {
+        private final HttpResponse.BodySubscriber<byte[]> delegate = HttpResponse.BodySubscribers.ofByteArray();
+        private java.util.concurrent.Flow.Subscription subscription;
+        private long size;
+        private boolean failed;
+        @Override public java.util.concurrent.CompletionStage<byte[]> getBody() { return delegate.getBody(); }
+        @Override public void onSubscribe(java.util.concurrent.Flow.Subscription value) {
+            subscription = value;
+            delegate.onSubscribe(value);
+        }
+        @Override public void onNext(java.util.List<java.nio.ByteBuffer> buffers) {
+            if (failed) return;
+            for (java.nio.ByteBuffer buffer : buffers) size += buffer.remaining();
+            if (size > 2 * 1024 * 1024) {
+                failed = true;
+                subscription.cancel();
+                delegate.onError(new IOException("天气响应超过 2 MiB"));
+            } else delegate.onNext(buffers);
+        }
+        @Override public void onError(Throwable error) { if (!failed) delegate.onError(error); }
+        @Override public void onComplete() { if (!failed) delegate.onComplete(); }
     }
 
     static void requireSuccess(int statusCode) throws WeatherException {

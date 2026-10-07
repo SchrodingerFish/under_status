@@ -253,14 +253,15 @@ public class MusicApiClient {
             conn.setRequestProperty("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8");
             String referer = currentUrl.contains("music.163.com") ? "https://music.163.com/" : getApiUrl();
             conn.setRequestProperty("Referer", referer);
-            conn.setInstanceFollowRedirects(true);
+            conn.setInstanceFollowRedirects(false);
 
+            try {
             int code = conn.getResponseCode();
             if (code == HttpURLConnection.HTTP_MOVED_PERM || code == HttpURLConnection.HTTP_MOVED_TEMP
                     || code == 307 || code == 308) {
                 String redirectUrl = conn.getHeaderField("Location");
                 if (redirectUrl != null && !redirectUrl.isBlank()) {
-                    currentUrl = redirectUrl.startsWith("http") ? redirectUrl : getApiUrl() + redirectUrl;
+                    currentUrl = URI.create(currentUrl).resolve(redirectUrl).toString();
                     continue;
                 }
             }
@@ -274,19 +275,15 @@ public class MusicApiClient {
             try (InputStream in = conn.getInputStream()) {
                 return readStream(in);
             }
+            } finally { conn.disconnect(); }
         }
         throw new Exception("Too many redirects for " + urlStr);
     }
 
     private String readStream(InputStream in) throws Exception {
-        StringBuilder sb = new StringBuilder();
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                sb.append(line).append("\n");
-            }
+        try (in) {
+            return new String(com.cn.schrodinger.understatus.BoundedInput.read(in, 2 * 1024 * 1024), StandardCharsets.UTF_8).trim();
         }
-        return sb.toString().trim();
     }
 
     private List<MusicSong> parseSearchResult(String json, String defaultSource) {

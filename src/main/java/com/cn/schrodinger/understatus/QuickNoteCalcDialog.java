@@ -44,6 +44,21 @@ public class QuickNoteCalcDialog extends JDialog {
     public boolean isPickingColor = false;
     public boolean isPinned = false;
 
+    @Override public void dispose() {
+        if (tabEntries != null) {
+            for (TabEntry entry : tabEntries) {
+                if (entry.loadedComponent instanceof NotesTabPanel notes && !notes.saveBeforeClose()) {
+                    isPinned = true;
+                    return;
+                }
+            }
+            for (TabEntry entry : tabEntries) {
+                if (entry.loadedComponent instanceof MusicTabPanel music) music.close();
+            }
+        }
+        super.dispose();
+    }
+
     private JTabbedPane tabbedPane;
     private final List<TabEntry> tabEntries = new ArrayList<>();
     private Point dragOffset;

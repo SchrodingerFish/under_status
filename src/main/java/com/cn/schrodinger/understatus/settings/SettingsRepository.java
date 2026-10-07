@@ -10,19 +10,30 @@ public final class SettingsRepository {
     public static final String DEFAULT_CLOCK_PATTERN = "yyyy-MM-dd EEEE HH:mm:ss";
     private static final SettingsRepository DEFAULT = new SettingsRepository(
             new PreferencesSettingsStore(NbPreferences.forModule(SettingsRepository.class)),
-            new KeyringSecretStore());
+            new KeyringSecretStore(), new FileContentStore(java.nio.file.Path.of(
+                    System.getProperty("netbeans.user", System.getProperty("user.home") + "/.understatus"),
+                    "config", "understatus", "documents")));
     private static final String WEATHER_SECRET = "com.cn.schrodinger.understatus.qweather.apiKey.v2";
 
     private final SettingsStore store;
     private final SecretStore secrets;
+    private final ContentStore contents;
 
     public SettingsRepository(SettingsStore store) {
         this(store, SecretStore.inMemory(new HashMap<>()));
     }
 
     public SettingsRepository(SettingsStore store, SecretStore secrets) {
+        this(store, secrets, new ContentStore() {
+            @Override public String load(String key, java.util.function.Supplier<String> legacy) { return legacy.get(); }
+            @Override public void save(String key, String value) { store.put(key, value); }
+        });
+    }
+
+    public SettingsRepository(SettingsStore store, SecretStore secrets, ContentStore contents) {
         this.store = Objects.requireNonNull(store);
         this.secrets = Objects.requireNonNull(secrets);
+        this.contents = Objects.requireNonNull(contents);
     }
 
     public static SettingsRepository getDefault() {
@@ -77,12 +88,12 @@ public final class SettingsRepository {
         store.putInt("toolboxHeight", settings.toolboxHeight());
     }
 
-    public String loadAlarms() { return store.get("alarmsList", ""); }
-    public void saveAlarms(String alarms) { store.put("alarmsList", alarms == null ? "" : alarms); }
-    public String loadNotes() { return store.get("notesListSerialized", ""); }
-    public void saveNotes(String notes) { store.put("notesListSerialized", notes == null ? "" : notes); }
-    public String loadFavorites() { return store.get("musicFavoritesSerialized", ""); }
-    public void saveFavorites(String favorites) { store.put("musicFavoritesSerialized", favorites == null ? "" : favorites); }
+    public String loadAlarms() { return contents.load("alarmsList", () -> store.get("alarmsList", "")); }
+    public void saveAlarms(String alarms) { contents.save("alarmsList", alarms == null ? "" : alarms); }
+    public String loadNotes() { return contents.load("notesListSerialized", () -> store.get("notesListSerialized", "")); }
+    public void saveNotes(String notes) { contents.save("notesListSerialized", notes == null ? "" : notes); }
+    public String loadFavorites() { return contents.load("musicFavoritesSerialized", () -> store.get("musicFavoritesSerialized", "")); }
+    public void saveFavorites(String favorites) { contents.save("musicFavoritesSerialized", favorites == null ? "" : favorites); }
 
     private static String validClockPattern(String pattern) {
         try {

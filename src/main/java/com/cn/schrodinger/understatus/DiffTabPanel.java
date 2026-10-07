@@ -1,11 +1,25 @@
 package com.cn.schrodinger.understatus;
 
 import com.cn.schrodinger.understatus.toolbox.core.DiffCalculator;
-import javax.swing.*;
+import javax.swing.BorderFactory;
+import javax.swing.JButton;
+import javax.swing.JComboBox;
+import javax.swing.JLabel;
+import javax.swing.JPanel;
+import javax.swing.JScrollPane;
+import javax.swing.JSplitPane;
+import javax.swing.JTextArea;
+import javax.swing.JTextPane;
+import javax.swing.SwingWorker;
+import javax.swing.UIManager;
 import javax.swing.text.Style;
 import javax.swing.text.StyleConstants;
 import javax.swing.text.StyledDocument;
-import java.awt.*;
+import java.awt.BorderLayout;
+import java.awt.Color;
+import java.awt.FlowLayout;
+import java.awt.Font;
+import java.awt.GridLayout;
 import java.util.List;
 
 /**
@@ -31,6 +45,8 @@ public class DiffTabPanel extends JPanel {
 
     private JComboBox<String> viewModeCombo;
     private JLabel statLabel;
+    private SwingWorker<List<DiffCalculator.DiffLine>, Void> comparison;
+    private List<DiffCalculator.DiffLine> preview = List.of();
 
     public DiffTabPanel() {
         initComponents();
@@ -104,6 +120,7 @@ public class DiffTabPanel extends JPanel {
         viewModeCombo = new JComboBox<>(new String[]{"统一视图 (Unified)", "左右双栏 (Side-by-Side)"});
         viewModeCombo.setFont(new Font("SansSerif", Font.PLAIN, 12));
         viewModeCombo.addActionListener(e -> {
+            renderPreview();
             diffViewerContainer.removeAll();
             if (viewModeCombo.getSelectedIndex() == 0) {
                 diffViewerContainer.add(unifiedScrollPane, BorderLayout.CENTER);
@@ -140,6 +157,8 @@ public class DiffTabPanel extends JPanel {
         JButton clearBtn = new JButton("清空");
         clearBtn.setFont(new Font("SansSerif", Font.PLAIN, 11));
         clearBtn.addActionListener(e -> {
+            if (comparison != null) comparison.cancel(true);
+            preview = List.of();
             textAreaA.setText("");
             textAreaB.setText("");
             unifiedDiffPane.setText("");
@@ -170,18 +189,42 @@ public class DiffTabPanel extends JPanel {
         String textA = textAreaA.getText();
         String textB = textAreaB.getText();
 
-        List<DiffCalculator.DiffLine> diffs = DiffCalculator.calculateDiff(textA, textB);
-        renderUnifiedDiff(diffs);
-        renderSideBySideDiff(diffs);
+        if (comparison != null) comparison.cancel(true);
+        statLabel.setText("正在对比… 大差异区域按整段替换；预览最多 2000 行/20 万字符");
+        comparison = new SwingWorker<>() {
+            @Override protected List<DiffCalculator.DiffLine> doInBackground() {
+                return DiffCalculator.calculateDiff(textA, textB);
+            }
+            @Override protected void done() {
+                if (isCancelled() || comparison != this) return;
+                try {
+                    List<DiffCalculator.DiffLine> diffs = get();
+                    int count = 0, chars = 0;
+                    while (count < diffs.size() && count < 2000 && chars + diffs.get(count).text.length() <= 200_000) {
+                        chars += diffs.get(count++).text.length();
+                    }
+                    preview = List.copyOf(diffs.subList(0, count));
+                    renderPreview();
+                    long additions = diffs.stream().filter(d -> d.type == 1).count();
+                    long deletions = diffs.stream().filter(d -> d.type == -1).count();
+                    statLabel.setText("+" + additions + " / -" + deletions + "；预览 " + count + "/" + diffs.size()
+                            + " 行（大差异按整段替换；复制仅含预览）");
+                } catch (Exception ex) {
+                    statLabel.setText("对比失败: " + (ex.getCause() == null ? ex.getMessage() : ex.getCause().getMessage()));
+                }
+            }
+        };
+        comparison.execute();
+    }
 
-        int additions = 0, deletions = 0, unchanged = 0;
-        for (DiffCalculator.DiffLine d : diffs) {
-            if (d.type == 1) additions++;
-            else if (d.type == -1) deletions++;
-            else unchanged++;
-        }
-        statLabel.setText(String.format("差异统计: +%d 行新增, -%d 行删除, %d 行一致",
-                additions, deletions, unchanged));
+    private void renderPreview() {
+        if (viewModeCombo.getSelectedIndex() == 0) renderUnifiedDiff(preview);
+        else renderSideBySideDiff(preview);
+    }
+
+    @Override public void removeNotify() {
+        if (comparison != null) comparison.cancel(true);
+        super.removeNotify();
     }
 
     private void renderUnifiedDiff(List<DiffCalculator.DiffLine> diffs) {
@@ -261,10 +304,10 @@ public class DiffTabPanel extends JPanel {
                     styleA = delStyleA;
                     textA = String.format("%4d | %s\n", aNo++, line.text);
                     styleB = defStyleB;
-                    textB = String.format("%4d |\n", bNo++);
+                    textB = "     |\n";
                 } else if (line.type == 1) { // Only in B
                     styleA = defStyleA;
-                    textA = String.format("%4d |\n", aNo++);
+                    textA = "     |\n";
                     styleB = addStyleB;
                     textB = String.format("%4d | %s\n", bNo++, line.text);
                 } else { // Unchanged

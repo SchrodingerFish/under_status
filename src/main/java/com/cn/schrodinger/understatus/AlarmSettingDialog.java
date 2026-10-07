@@ -79,7 +79,11 @@ public class AlarmSettingDialog extends JDialog {
         JButton cancelBtn = new JButton("取消 (Cancel)");
 
         saveBtn.addActionListener(e -> {
-            saveSettings();
+            try { saveSettings(); }
+            catch (RuntimeException ex) {
+                JOptionPane.showMessageDialog(this, ex.getMessage(), "闹钟保存失败", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
             if (onSaveCallback != null) {
                 onSaveCallback.run();
             }

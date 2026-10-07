@@ -20,4 +20,16 @@ class AlarmSchedulerTest {
         assertFalse(alarm.enabled);
         assertTrue(scheduler.dueAlarms(List.of(alarm), noon.plusSeconds(30)).isEmpty());
     }
+
+    @Test void catchesUpRecentAlarmsAndPersistsDailyDeduplication() {
+        Alarm alarm = Alarm.once("12:00", "reminder");
+        alarm.repeatMode = "DAILY";
+        AlarmScheduler scheduler = new AlarmScheduler();
+        LocalDateTime noon = LocalDateTime.of(2026, 10, 7, 12, 0);
+        assertTrue(scheduler.dueAlarms(List.of(alarm), noon.minusMinutes(1)).isEmpty());
+        assertEquals(1, scheduler.dueAlarms(List.of(alarm), noon.plusMinutes(2)).size());
+        Alarm reloaded = Alarm.deserialize(alarm.serialize());
+        assertEquals(noon.toLocalDate(), reloaded.lastTriggeredDate);
+        assertTrue(new AlarmScheduler().dueAlarms(List.of(reloaded), noon.plusSeconds(30)).isEmpty());
+    }
 }

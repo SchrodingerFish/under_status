@@ -15,6 +15,7 @@ public final class JsonParser {
         if (json == null) {
             throw error("响应为空");
         }
+        if (json.length() > 2_000_000) throw error("输入超过 200 万字符");
         Cursor cursor = new Cursor(json);
         JsonValue value = cursor.readValue();
         cursor.skipWhitespace();
@@ -32,12 +33,15 @@ public final class JsonParser {
     private static final class Cursor {
         private final String input;
         private int position;
+        private int depth;
 
         Cursor(String input) {
             this.input = input;
         }
 
         JsonValue readValue() throws WeatherException {
+            if (++depth > 128) throw error("嵌套超过 128 层");
+            try {
             skipWhitespace();
             if (atEnd()) {
                 throw error("缺少值");
@@ -51,6 +55,7 @@ public final class JsonParser {
                 case 'n' -> readLiteral("null", JsonValue.NullValue.INSTANCE);
                 default -> readNumber();
             };
+            } finally { depth--; }
         }
 
         private JsonValue readObject() throws WeatherException {

@@ -38,6 +38,9 @@ public class NotesTabPanel extends JPanel {
     private JList<String> noteJList;
     private JTextArea noteTextArea;
     private boolean isUpdatingSelection = false;
+    private boolean dirty;
+    private boolean loadFailed;
+    private final javax.swing.JLabel saveStatus = new javax.swing.JLabel("已保存");
     private final javax.swing.Timer saveDebounceTimer = new javax.swing.Timer(500, e -> flushSaveToPreferences());
 
     public NotesTabPanel() {
@@ -52,6 +55,7 @@ public class NotesTabPanel extends JPanel {
     private void initComponents() {
         setLayout(new BorderLayout());
         setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
+        add(saveStatus, BorderLayout.SOUTH);
 
         addHierarchyListener(e -> {
             if ((e.getChangeFlags() & java.awt.event.HierarchyEvent.SHOWING_CHANGED) != 0 && !isShowing()) {
@@ -131,6 +135,8 @@ public class NotesTabPanel extends JPanel {
         int idx = noteJList.getSelectedIndex();
         if (idx >= 0) {
             notesList.get(idx).content = noteTextArea.getText();
+            dirty = true;
+            saveStatus.setText("未保存…");
             saveDebounceTimer.restart();
         }
     }
@@ -143,6 +149,7 @@ public class NotesTabPanel extends JPanel {
     }
 
     private void addNote() {
+        if (loadFailed) return;
         String title = JOptionPane.showInputDialog(this, "请输入新建便签名称:", "新建便签 (Add Note)", JOptionPane.PLAIN_MESSAGE);
         if (title == null) return;
         title = title.trim();
@@ -151,12 +158,14 @@ public class NotesTabPanel extends JPanel {
         }
         NoteEntry newEntry = new NoteEntry(title, "");
         notesList.add(newEntry);
+        dirty = true;
         listModel.addElement(title);
         saveNotesToPreferences();
         noteJList.setSelectedIndex(notesList.size() - 1);
     }
 
     private void deleteNote() {
+        if (loadFailed) return;
         int idx = noteJList.getSelectedIndex();
         if (idx < 0) return;
 
@@ -164,6 +173,7 @@ public class NotesTabPanel extends JPanel {
         if (confirm != JOptionPane.YES_OPTION) return;
 
         notesList.remove(idx);
+        dirty = true;
         listModel.remove(idx);
         saveNotesToPreferences();
 
@@ -173,6 +183,7 @@ public class NotesTabPanel extends JPanel {
             // Always keep at least 1 note
             NoteEntry def = new NoteEntry("便签 1", "");
             notesList.add(def);
+            dirty = true;
             listModel.addElement(def.title);
             saveNotesToPreferences();
             noteJList.setSelectedIndex(0);
@@ -180,6 +191,7 @@ public class NotesTabPanel extends JPanel {
     }
 
     private void renameNote() {
+        if (loadFailed) return;
         int idx = noteJList.getSelectedIndex();
         if (idx < 0) return;
 
@@ -190,18 +202,38 @@ public class NotesTabPanel extends JPanel {
         if (newTitle.isEmpty()) return;
 
         notesList.get(idx).title = newTitle;
+        dirty = true;
         listModel.set(idx, newTitle);
         saveNotesToPreferences();
         noteJList.setSelectedIndex(idx);
     }
 
     private void saveNotesToPreferences() {
+        if (!dirty || loadFailed) return;
         List<Note> notes = notesList.stream().map(entry -> new Note(entry.title, entry.content)).toList();
-        SettingsRepository.getDefault().saveNotes(noteCodec.encode(notes));
+        try {
+            SettingsRepository.getDefault().saveNotes(noteCodec.encode(notes));
+            dirty = false;
+            saveStatus.setText("已保存");
+        } catch (RuntimeException ex) {
+            saveStatus.setText("保存失败，内容仍在窗口中；关闭前请复制备份。" + ex.getMessage());
+        }
+    }
+
+    public boolean saveBeforeClose() {
+        flushSaveToPreferences();
+        return !dirty;
     }
 
     private void loadNotesFromPreferences() {
-        String data = SettingsRepository.getDefault().loadNotes();
+        String data;
+        try { data = SettingsRepository.getDefault().loadNotes(); }
+        catch (RuntimeException ex) {
+            loadFailed = true;
+            saveStatus.setText("读取失败，已停止自动保存以保护原数据: " + ex.getMessage());
+            noteTextArea.setEditable(false);
+            return;
+        }
         notesList.clear();
         listModel.clear();
 

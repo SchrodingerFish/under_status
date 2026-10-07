@@ -20,7 +20,7 @@ public class Alarm {
     public String repeatMode; // "ONCE", "DAILY", "WEEKDAYS", "CUSTOM"
     public boolean[] repeatDays = new boolean[7]; // Index 0=Mon, 6=Sun
 
-    // Runtime state (non-persistent)
+    // Persisted to prevent duplicate reminders after reloading settings or restarting.
     public LocalDate lastTriggeredDate = null;
 
     public Alarm() {
@@ -62,6 +62,7 @@ public class Alarm {
         for (boolean day : repeatDays) {
             sb.append(day ? "1" : "0");
         }
+        sb.append("||").append(lastTriggeredDate == null ? "" : lastTriggeredDate);
         return sb.toString();
     }
 
@@ -85,7 +86,9 @@ public class Alarm {
             for (int i = 0; i < 7 && i < daysStr.length(); i++) {
                 repeatDays[i] = (daysStr.charAt(i) == '1');
             }
-            return new Alarm(id, time, message, enabled, repeatMode, repeatDays);
+            Alarm alarm = new Alarm(id, time, message, enabled, repeatMode, repeatDays);
+            if (parts.length > 6 && !parts[6].isBlank()) alarm.lastTriggeredDate = LocalDate.parse(parts[6]);
+            return alarm;
         } catch (Exception ex) {
             java.util.logging.Logger.getLogger(Alarm.class.getName()).log(java.util.logging.Level.FINE, "Ignoring malformed persisted alarm", ex);
             return null;

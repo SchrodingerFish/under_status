@@ -75,6 +75,7 @@ public final class EditorMetricsTracker implements AutoCloseable {
     }
 
     private void switchDocument(JTextComponent editor) {
+        if (!started) return;
         Document next = editor == null ? null : editor.getDocument();
         if (currentDocument != null && currentDocument != next) {
             currentDocument.removeDocumentListener(documentListener);

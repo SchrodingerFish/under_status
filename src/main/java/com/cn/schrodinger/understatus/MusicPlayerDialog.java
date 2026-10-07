@@ -30,6 +30,7 @@ public class MusicPlayerDialog extends JDialog {
 
     private MusicPlayerDialog(Frame parent) {
         super(parent, "🎵 独立音乐播放器 (Music Player)", false);
+        setDefaultCloseOperation(DISPOSE_ON_CLOSE);
         setLayout(new BorderLayout());
         setMinimumSize(new Dimension(800, 550));
         setPreferredSize(new Dimension(900, 600));
@@ -56,5 +57,10 @@ public class MusicPlayerDialog extends JDialog {
 
     public MusicTabPanel getMusicPanel() {
         return musicPanel;
+    }
+
+    @Override public void dispose() {
+        if (musicPanel != null) musicPanel.close();
+        super.dispose();
     }
 }

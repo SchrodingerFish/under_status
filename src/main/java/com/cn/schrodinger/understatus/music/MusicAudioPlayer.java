@@ -36,14 +36,15 @@ public class MusicAudioPlayer {
         return t;
     });
 
-    private Player currentJlayerPlayer;
+    private volatile Player currentJlayerPlayer;
     private InputStream currentAudioStream;
     private HttpURLConnection currentHttpConn;
     private MusicSong currentSong;
     private volatile boolean isPlaying;
     private volatile boolean isPaused;
     private volatile boolean userStopped;
-    private PlayerListener listener;
+    private volatile PlayerListener listener;
+    private volatile boolean closed;
     private javax.swing.Timer progressTimer;
 
     private long playGeneration = 0;
@@ -91,6 +92,7 @@ public class MusicAudioPlayer {
      * Play given song audio stream.
      */
     public synchronized void play(MusicSong song, String audioUrl) {
+        if (closed) return;
         this.playGeneration++;
         final long generation = this.playGeneration;
 
@@ -118,9 +120,9 @@ public class MusicAudioPlayer {
                 }
             }
 
-            long startTime = System.currentTimeMillis();
             try {
-                BufferedInputStream bufferedStream = openAudioStream(audioUrl);
+                BufferedInputStream bufferedStream = openAudioStream(audioUrl, generation);
+                Player player;
 
                 synchronized (MusicAudioPlayer.this) {
                     if (generation != playGeneration || userStopped || currentSong != targetSong) {
@@ -131,20 +133,33 @@ public class MusicAudioPlayer {
                         return;
                     }
                     currentAudioStream = bufferedStream;
-                    currentJlayerPlayer = new Player(bufferedStream);
+                    player = createPlayer(bufferedStream);
+                    currentJlayerPlayer = player;
                     playbackStartTimestamp = System.currentTimeMillis();
                 }
 
-                currentJlayerPlayer.play();
+                int frames = 0;
+                while (true) {
+                    synchronized (MusicAudioPlayer.this) {
+                        while (generation == playGeneration && isPaused && !closed) MusicAudioPlayer.this.wait();
+                        if (generation != playGeneration || userStopped || closed) return;
+                    }
+                    if (!player.play(1)) break;
+                    frames++;
+                }
 
-                long elapsed = System.currentTimeMillis() - startTime;
                 synchronized (MusicAudioPlayer.this) {
-                    boolean finishedNaturally = generation == playGeneration && isPlaying && !userStopped && !isPaused && currentSong == targetSong;
+                    boolean finishedNaturally = generation == playGeneration && !userStopped && currentSong == targetSong;
                     if (finishedNaturally) {
+                        boolean pausedAtEnd = isPaused;
                         stopInternal(false);
-                        if (elapsed > 1500 && listener != null) {
-                            SwingUtilities.invokeLater(() -> listener.onSongFinished(targetSong));
-                        } else {
+                        if (frames > 0 && !pausedAtEnd && listener != null) {
+                            SwingUtilities.invokeLater(() -> {
+                                synchronized (MusicAudioPlayer.this) {
+                                    if (!closed && generation == playGeneration && listener != null) listener.onSongFinished(targetSong);
+                                }
+                            });
+                        } else if (frames == 0) {
                             notifyError("音频无法解析或音轨无效");
                         }
                     }
@@ -152,7 +167,7 @@ public class MusicAudioPlayer {
             } catch (Exception ex) {
                 LOGGER.log(Level.WARNING, "Error playing audio stream", ex);
                 synchronized (MusicAudioPlayer.this) {
-                    boolean failedWhilePlaying = generation == playGeneration && isPlaying && !userStopped && currentSong == targetSong;
+                    boolean failedWhilePlaying = generation == playGeneration && !userStopped && currentSong == targetSong;
                     if (failedWhilePlaying) {
                         stopInternal(false);
                         notifyError("音频播放失败: " + ex.getMessage());
@@ -182,21 +197,22 @@ public class MusicAudioPlayer {
         }
         isPaused = true;
         isPlaying = false;
-        stopJlayerOnly();
         progressTimer.stop();
         notifyStatusChanged();
     }
 
     public synchronized void resume() {
-        if (currentSong != null && (isPaused || !isPlaying)) {
-            String url = currentSong.getUrl();
-            if (url != null && !url.isBlank()) {
-                play(currentSong, url);
-            }
+        if (!closed && currentSong != null && isPaused) {
+            isPaused = false;
+            isPlaying = true;
+            notifyAll();
+            progressTimer.start();
+            notifyStatusChanged();
         }
     }
 
     public synchronized void stop() {
+        playGeneration++;
         stopInternal(true);
     }
 
@@ -204,14 +220,13 @@ public class MusicAudioPlayer {
         userStopped = explicitUserStop;
         isPlaying = false;
         isPaused = false;
+        notifyAll();
         progressTimer.stop();
 
         stopJlayerOnly();
 
-        if (explicitUserStop) {
-            currentSong = null;
-            notifyStatusChanged();
-        }
+        if (explicitUserStop) currentSong = null;
+        notifyStatusChanged();
     }
 
     private void stopJlayerOnly() {
@@ -245,22 +260,40 @@ public class MusicAudioPlayer {
         if (listener != null) {
             final boolean status = isPlaying;
             final MusicSong song = currentSong;
-            SwingUtilities.invokeLater(() -> listener.onStatusChanged(status, song));
+            final long generation = playGeneration;
+            SwingUtilities.invokeLater(() -> {
+                synchronized (MusicAudioPlayer.this) {
+                    if (!closed && generation == playGeneration && listener != null) listener.onStatusChanged(status, song);
+                }
+            });
         }
     }
 
     private void notifyError(String msg) {
         if (listener != null) {
-            SwingUtilities.invokeLater(() -> listener.onError(msg));
+            final long generation = playGeneration;
+            SwingUtilities.invokeLater(() -> {
+                synchronized (MusicAudioPlayer.this) {
+                    if (!closed && generation == playGeneration && listener != null) listener.onError(msg);
+                }
+            });
         }
     }
 
-    private BufferedInputStream openAudioStream(String audioUrlStr) throws Exception {
+    protected Player createPlayer(InputStream stream) throws javazoom.jl.decoder.JavaLayerException {
+        return new Player(stream);
+    }
+
+    protected BufferedInputStream openAudioStream(String audioUrlStr, long generation) throws Exception {
         String currentUrl = audioUrlStr;
         for (int attempt = 0; attempt < 5; attempt++) {
             URL url = URI.create(currentUrl).toURL();
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
             synchronized (this) {
+                if (generation != playGeneration || closed) {
+                    conn.disconnect();
+                    throw new java.util.concurrent.CancellationException();
+                }
                 currentHttpConn = conn;
             }
 
@@ -269,14 +302,14 @@ public class MusicAudioPlayer {
             conn.setRequestProperty("Referer", "https://music.163.com/");
             conn.setConnectTimeout(10000);
             conn.setReadTimeout(15000);
-            conn.setInstanceFollowRedirects(true);
+            conn.setInstanceFollowRedirects(false);
 
             int code = conn.getResponseCode();
             if (code == HttpURLConnection.HTTP_MOVED_PERM || code == HttpURLConnection.HTTP_MOVED_TEMP
                     || code == 307 || code == 308) {
                 String location = conn.getHeaderField("Location");
                 if (location != null && !location.isBlank()) {
-                    currentUrl = location.startsWith("http") ? location : "https://music.163.com" + location;
+                    currentUrl = URI.create(currentUrl).resolve(location).toString();
                     conn.disconnect();
                     continue;
                 }
@@ -292,7 +325,9 @@ public class MusicAudioPlayer {
         throw new Exception("Too many redirects for " + audioUrlStr);
     }
 
-    public void close() {
+    public synchronized void close() {
+        closed = true;
+        listener = null;
         stop();
         executor.shutdownNow();
     }

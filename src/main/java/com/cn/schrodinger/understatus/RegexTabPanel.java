@@ -214,11 +214,11 @@ public class RegexTabPanel extends JPanel {
     private DocumentListener createDocListener() {
         return new DocumentListener() {
             @Override
-            public void insertUpdate(DocumentEvent e) { regexDebounceTimer.restart(); }
+            public void insertUpdate(DocumentEvent e) { scheduleRegex(); }
             @Override
-            public void removeUpdate(DocumentEvent e) { regexDebounceTimer.restart(); }
+            public void removeUpdate(DocumentEvent e) { scheduleRegex(); }
             @Override
-            public void changedUpdate(DocumentEvent e) { regexDebounceTimer.restart(); }
+            public void changedUpdate(DocumentEvent e) { scheduleRegex(); }
         };
     }
 
@@ -229,72 +229,55 @@ public class RegexTabPanel extends JPanel {
         runRegex();
     }
 
+    private javax.swing.SwingWorker<com.cn.schrodinger.understatus.toolbox.core.RegexEvaluator.Result, Void> regexWorker;
+
     private void runRegex() {
-        Highlighter highlighter = testTextArea.getHighlighter();
-        highlighter.removeAllHighlights();
-
-        String regex = regexField.getText().trim();
+        if (regexWorker != null) regexWorker.cancel(true);
+        testTextArea.getHighlighter().removeAllHighlights();
+        String regex = regexField.getText();
         String text = testTextArea.getText();
-
         if (regex.isEmpty()) {
             statusLabel.setText("请输入正则表达式");
-            statusLabel.setForeground(UIManager.getColor("Label.foreground"));
             resultArea.setText("");
             return;
         }
-
-        int flags = 0;
-        if (caseInsensitiveCheck.isSelected()) flags |= Pattern.CASE_INSENSITIVE;
-        if (multilineCheck.isSelected()) flags |= Pattern.MULTILINE;
-
-        try {
-            Pattern pattern = Pattern.compile(regex, flags);
-            Matcher matcher = pattern.matcher(text);
-
-            int matches = 0;
-            final int MAX_MATCHES = 500;
-            boolean truncated = false;
-            StringBuilder groupOutput = new StringBuilder();
-
-            while (matcher.find()) {
-                matches++;
-                if (matches <= MAX_MATCHES) {
-                    highlighter.addHighlight(matcher.start(), matcher.end(), highlightPainter);
-                    if (!replaceCheck.isSelected()) {
-                        groupOutput.append(String.format("【匹配 #%d】: \"%s\" (位置: %d~%d)\n",
-                                matches, matcher.group(0), matcher.start(), matcher.end()));
-                        int groupCount = matcher.groupCount();
-                        for (int g = 1; g <= groupCount; g++) {
-                            groupOutput.append(String.format("   └─ Group %d: \"%s\"\n", g, matcher.group(g)));
-                        }
-                    }
-                } else if (!truncated) {
-                    truncated = true;
-                    if (!replaceCheck.isSelected()) {
-                        groupOutput.append("\n⚠️ 匹配数量较多，为保障界面流畅已截断展示前 500 个匹配结果。\n");
-                    }
+        int flags = (caseInsensitiveCheck.isSelected() ? Pattern.CASE_INSENSITIVE : 0)
+                | (multilineCheck.isSelected() ? Pattern.MULTILINE : 0);
+        String replacement = replaceCheck.isSelected() ? replaceField.getText() : null;
+        statusLabel.setText("正在匹配…");
+        regexWorker = new javax.swing.SwingWorker<>() {
+            @Override protected com.cn.schrodinger.understatus.toolbox.core.RegexEvaluator.Result doInBackground() {
+                return com.cn.schrodinger.understatus.toolbox.core.RegexEvaluator.evaluate(regex, text, flags, replacement);
+            }
+            @Override protected void done() {
+                if (isCancelled() || regexWorker != this) return;
+                try {
+                    var result = get();
+                    Highlighter highlighter = testTextArea.getHighlighter();
+                    highlighter.removeAllHighlights();
+                    for (var match : result.matches()) highlighter.addHighlight(match.start(), match.end(), highlightPainter);
+                    resultArea.setText(result.output());
+                    statusLabel.setText("匹配: " + result.matches().size() + (result.truncated() ? "（已截断）" : ""));
+                    statusLabel.setForeground(UIManager.getColor("Label.foreground"));
+                } catch (Exception ex) {
+                    Throwable cause = ex.getCause() == null ? ex : ex.getCause();
+                    statusLabel.setText("匹配失败: " + cause.getMessage());
+                    statusLabel.setForeground(Color.RED);
+                    resultArea.setText("");
                 }
             }
+        };
+        regexWorker.execute();
+    }
 
-            if (replaceCheck.isSelected()) {
-                String replacement = replaceField.getText();
-                String replaced = pattern.matcher(text).replaceAll(replacement);
-                resultArea.setText(replaced);
-                statusLabel.setText(String.format("匹配段数: %d 段 | 替换模式已生效", matches));
-            } else {
-                resultArea.setText(groupOutput.length() > 0 ? groupOutput.toString() : "无分组匹配信息");
-                statusLabel.setText(String.format("匹配段数: %d 段 (Matches: %d)", matches, matches));
-            }
+    private void scheduleRegex() {
+        if (regexWorker != null) regexWorker.cancel(true);
+        regexDebounceTimer.restart();
+    }
 
-            statusLabel.setForeground(UIManager.getColor("Label.foreground"));
-        } catch (java.util.regex.PatternSyntaxException ex) {
-            statusLabel.setText("正则语法错误 (Regex Syntax Error): " + ex.getDescription());
-            statusLabel.setForeground(Color.RED);
-            resultArea.setText("错误位置: " + ex.getIndex() + "\n" + ex.getMessage());
-        } catch (Exception ex) {
-            statusLabel.setText("匹配失败: " + ex.getMessage());
-            statusLabel.setForeground(Color.RED);
-            resultArea.setText(ex.toString());
-        }
+    @Override public void removeNotify() {
+        regexDebounceTimer.stop();
+        if (regexWorker != null) regexWorker.cancel(true);
+        super.removeNotify();
     }
 }

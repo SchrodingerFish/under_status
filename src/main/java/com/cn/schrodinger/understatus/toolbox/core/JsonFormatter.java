@@ -21,6 +21,7 @@ public class JsonFormatter {
         if (json == null) {
             return "";
         }
+        validate(json);
         StringBuilder pretty = new StringBuilder(json.length() * 3 / 2);
         int indentLevel = 0;
         boolean inString = false;
@@ -87,6 +88,7 @@ public class JsonFormatter {
         if (json == null) {
             return "";
         }
+        validate(json);
         StringBuilder min = new StringBuilder(json.length());
         boolean inString = false;
         for (int i = 0; i < json.length(); i++) {
@@ -129,6 +131,14 @@ public class JsonFormatter {
             }
         }
         return sb.toString();
+    }
+
+    private static void validate(String json) {
+        if (json.isBlank()) return;
+        try { com.cn.schrodinger.understatus.weather.JsonParser.parse(json); }
+        catch (com.cn.schrodinger.understatus.weather.WeatherException ex) {
+            throw new IllegalArgumentException(ex.getMessage().replace("天气响应", "输入"), ex);
+        }
     }
 
     public static String unescape(String escaped) {

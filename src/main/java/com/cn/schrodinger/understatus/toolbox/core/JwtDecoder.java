@@ -5,8 +5,8 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.Base64;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+
+
 
 /**
  * Standard compliance JSON Web Token (JWT) decoder and diagnostics analyzer.
@@ -19,23 +19,15 @@ public class JwtDecoder {
     private static final DateTimeFormatter TIME_FMT = 
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").withZone(ZoneId.systemDefault());
 
-    private static final Pattern PATTERN_ALG = Pattern.compile("\"alg\"\\s*:\\s*\"([^\"]*)\"");
-    private static final Pattern PATTERN_TYP = Pattern.compile("\"typ\"\\s*:\\s*\"([^\"]*)\"");
-    private static final Pattern PATTERN_SUB = Pattern.compile("\"sub\"\\s*:\\s*\"([^\"]*)\"");
-    private static final Pattern PATTERN_ISS = Pattern.compile("\"iss\"\\s*:\\s*\"([^\"]*)\"");
-    private static final Pattern PATTERN_AUD = Pattern.compile("\"aud\"\\s*:\\s*\"([^\"]*)\"");
 
-    private static final Pattern PATTERN_EXP = Pattern.compile("\"exp\"\\s*:\\s*(\\d+)");
-    private static final Pattern PATTERN_IAT = Pattern.compile("\"iat\"\\s*:\\s*(\\d+)");
-    private static final Pattern PATTERN_NBF = Pattern.compile("\"nbf\"\\s*:\\s*(\\d+)");
 
     public static String decodeJwt(String token) {
         if (token == null || token.trim().isEmpty()) {
             return "";
         }
         token = token.trim();
-        String[] parts = token.split("\\.");
-        if (parts.length < 2) {
+        String[] parts = token.split("\\.", -1);
+        if (parts.length < 2 || parts.length > 3 || parts[0].isEmpty() || parts[1].isEmpty() || token.length() > 200_000) {
             return "无效的 JWT 格式 (Must contain at least Header and Payload parts separated by dots)";
         }
         try {
@@ -45,15 +37,18 @@ public class JwtDecoder {
             StringBuilder sb = new StringBuilder();
             sb.append("════════════════════ 🎫 JWT 诊断分析 (Diagnostics) ════════════════════\n");
 
-            // Extract claims
-            String alg = extractStringClaim(header, PATTERN_ALG);
-            String typ = extractStringClaim(header, PATTERN_TYP);
-            Long exp = extractLongClaim(payload, PATTERN_EXP);
-            Long iat = extractLongClaim(payload, PATTERN_IAT);
-            Long nbf = extractLongClaim(payload, PATTERN_NBF);
-            String sub = extractStringClaim(payload, PATTERN_SUB);
-            String iss = extractStringClaim(payload, PATTERN_ISS);
-            String aud = extractStringClaim(payload, PATTERN_AUD);
+            sb.append("仅解码，未验证签名；时间字段不能证明令牌有效。\n");
+            var headerObject = com.cn.schrodinger.understatus.weather.JsonParser.parse(header).asObject();
+            var payloadObject = com.cn.schrodinger.understatus.weather.JsonParser.parse(payload).asObject();
+            // Extract only top-level claims
+            String alg = stringClaim(headerObject, "alg");
+            String typ = stringClaim(headerObject, "typ");
+            Long exp = numberClaim(payloadObject, "exp");
+            Long iat = numberClaim(payloadObject, "iat");
+            Long nbf = numberClaim(payloadObject, "nbf");
+            String sub = stringClaim(payloadObject, "sub");
+            String iss = stringClaim(payloadObject, "iss");
+            String aud = audience(payloadObject);
 
             long now = Instant.now().getEpochSecond();
 
@@ -61,12 +56,12 @@ public class JwtDecoder {
             if (exp != null) {
                 long diff = exp - now;
                 if (diff > 0) {
-                    sb.append("【令牌状态】: 🟢 有效中 (剩余 ").append(formatDuration(diff)).append(")\n");
+                    sb.append("【令牌状态】: 🟢 未到 exp 时间（未验签） (剩余 ").append(formatDuration(diff)).append(")\n");
                 } else {
                     sb.append("【令牌状态】: 🔴 已过期 (已过期 ").append(formatDuration(-diff)).append(")\n");
                 }
             } else {
-                sb.append("【令牌状态】: ⚪ 永久有效 (未包含 exp 过期时间)\n");
+                sb.append("【令牌状态】: ⚪ 未提供 exp，无法判断过期时间\n");
             }
 
             if (nbf != null && nbf > now) {
@@ -131,22 +126,33 @@ public class JwtDecoder {
         }
     }
 
-    private static Long extractLongClaim(String json, Pattern pattern) {
-        Matcher m = pattern.matcher(json);
-        if (m.find()) {
-            try {
-                return Long.parseLong(m.group(1));
-            } catch (Exception ignored) {}
-        }
-        return null;
+    private static String stringClaim(com.cn.schrodinger.understatus.weather.JsonValue.ObjectValue json, String key) {
+        var value = json.values().get(key);
+        if (value == null) return null;
+        if (value instanceof com.cn.schrodinger.understatus.weather.JsonValue.StringValue string) return string.value();
+        throw new IllegalArgumentException(key + " 必须是字符串");
     }
 
-    private static String extractStringClaim(String json, Pattern pattern) {
-        Matcher m = pattern.matcher(json);
-        if (m.find()) {
-            return m.group(1);
+    private static Long numberClaim(com.cn.schrodinger.understatus.weather.JsonValue.ObjectValue json, String key) {
+        var value = json.values().get(key);
+        if (value == null) return null;
+        if (value instanceof com.cn.schrodinger.understatus.weather.JsonValue.NumberValue number) return number.value().longValueExact();
+        throw new IllegalArgumentException(key + " 必须是整数时间戳");
+    }
+
+    private static String audience(com.cn.schrodinger.understatus.weather.JsonValue.ObjectValue json) throws Exception {
+        var value = json.values().get("aud");
+        if (value == null) return null;
+        if (value instanceof com.cn.schrodinger.understatus.weather.JsonValue.ArrayValue array) {
+            java.util.List<String> audiences = new java.util.ArrayList<>();
+            for (var item : array.asArray()) {
+                if (!(item instanceof com.cn.schrodinger.understatus.weather.JsonValue.StringValue text)) {
+                    throw new IllegalArgumentException("aud 数组必须只包含字符串");
+                }
+                audiences.add(text.value());
+            }
+            return String.join(", ", audiences);
         }
-        return null;
+        return stringClaim(json, "aud");
     }
 }
-

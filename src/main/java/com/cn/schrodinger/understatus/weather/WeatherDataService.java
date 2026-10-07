@@ -29,7 +29,7 @@ public final class WeatherDataService {
             boolean force) throws WeatherException {
         String identity = (autoIp ? "ip:" : "city:") + (city == null ? "" : city.trim());
         WeatherCacheKey key = key(identity, "location", "", config, null);
-        return load(key, LocationContext.class, SESSION_TTL, force,
+        return load(key, LocationContext.class, Duration.ofMinutes(30), force,
                 () -> resolver.resolve(config, city, autoIp)).value();
     }
 
@@ -97,6 +97,7 @@ public final class WeatherDataService {
     }
 
     public void clearLocation(LocationContext location) {
+        if (location == null) return;
         cache.clearLocation(location.locationId());
         cache.clearLocation(location.coordinate());
     }
@@ -105,16 +106,17 @@ public final class WeatherDataService {
 
     private <T> Result<T> load(WeatherCacheKey key, Class<T> type, Duration ttl,
             boolean force, Loader<T> loader) throws WeatherException {
+        long generation = cache.generation();
         WeatherCache.CachedValue<T> existing = cache.get(key, type).orElse(null);
         if (!force && existing != null && !existing.stale()) {
             return new Result<>(existing.value(), false);
         }
         try {
             T value = executeWithRetry(loader);
-            cache.put(key, value, ttl);
+            cache.putIfCurrent(generation, key, value, ttl);
             return new Result<>(value, false);
         } catch (WeatherException ex) {
-            if (existing != null) {
+            if (existing != null && retryable(ex) && generation == cache.generation()) {
                 return new Result<>(existing.value(), true);
             }
             throw ex;
@@ -124,16 +126,17 @@ public final class WeatherDataService {
     @SuppressWarnings({"unchecked", "rawtypes"})
     private <T> Result<List<T>> loadList(WeatherCacheKey key, Duration ttl,
             boolean force, Loader<List<T>> loader) throws WeatherException {
+        long generation = cache.generation();
         WeatherCache.CachedValue<List> existing = cache.get(key, List.class).orElse(null);
         if (!force && existing != null && !existing.stale()) {
             return new Result<>((List<T>) existing.value(), false);
         }
         try {
             List<T> value = List.copyOf(executeWithRetry(loader));
-            cache.put(key, value, ttl);
+            cache.putIfCurrent(generation, key, value, ttl);
             return new Result<>(value, false);
         } catch (WeatherException ex) {
-            if (existing != null) {
+            if (existing != null && retryable(ex) && generation == cache.generation()) {
                 return new Result<>((List<T>) existing.value(), true);
             }
             throw ex;
@@ -161,6 +164,7 @@ public final class WeatherDataService {
     }
 
     private static boolean retryable(WeatherException error) {
+        if (Thread.currentThread().isInterrupted()) return false;
         return error.kind() == WeatherException.Kind.TIMEOUT
                 || error.kind() == WeatherException.Kind.NETWORK
                 || error.kind() == WeatherException.Kind.UNAVAILABLE;
@@ -168,7 +172,7 @@ public final class WeatherDataService {
 
     private static WeatherCacheKey key(String location, String endpoint, String range,
             QWeatherConfig config, LocalDate date) {
-        return new WeatherCacheKey(location, endpoint, range, config.language(),
+        return new WeatherCacheKey(location, config.cacheIdentity() + ":" + endpoint, range, config.language(),
                 config.unit(), date);
     }
 

@@ -11,8 +11,13 @@ import java.util.logging.Logger;
 public final class AlarmScheduler {
 
     private static final Logger LOGGER = Logger.getLogger(AlarmScheduler.class.getName());
+    private LocalDateTime previousCheck;
 
     public List<Alarm> dueAlarms(List<Alarm> alarms, LocalDateTime now) {
+        LocalDateTime start = previousCheck == null || previousCheck.isAfter(now)
+                ? now.withSecond(0).withNano(0).minusNanos(1) : previousCheck;
+        if (start.isBefore(now.minusMinutes(5))) start = now.minusMinutes(5);
+        previousCheck = now;
         List<Alarm> due = new ArrayList<>();
         for (Alarm alarm : alarms) {
             if (!alarm.enabled || alarm.lastTriggeredDate != null && alarm.lastTriggeredDate.equals(now.toLocalDate())) {
@@ -20,11 +25,13 @@ public final class AlarmScheduler {
             }
             try {
                 LocalTime alarmTime = LocalTime.parse(alarm.time);
-                if (alarmTime.getHour() != now.getHour() || alarmTime.getMinute() != now.getMinute()) {
+                LocalDateTime scheduled = now.toLocalDate().atTime(alarmTime);
+                if (scheduled.isAfter(now)) scheduled = scheduled.minusDays(1);
+                if (!scheduled.isAfter(start) || scheduled.toLocalDate().equals(alarm.lastTriggeredDate)) {
                     continue;
                 }
-                if (matchesRepeat(alarm, now.getDayOfWeek())) {
-                    alarm.lastTriggeredDate = now.toLocalDate();
+                if (matchesRepeat(alarm, scheduled.getDayOfWeek())) {
+                    alarm.lastTriggeredDate = scheduled.toLocalDate();
                     if ("ONCE".equals(alarm.repeatMode)) {
                         alarm.enabled = false;
                     }

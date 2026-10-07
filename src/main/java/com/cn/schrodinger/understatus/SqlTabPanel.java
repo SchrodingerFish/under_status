@@ -55,10 +55,10 @@ public class SqlTabPanel extends JPanel {
         String input = sqlTextArea.getText().trim();
         if (input.isEmpty()) return;
         
-        if (prettify) {
-            sqlTextArea.setText(SqlFormatter.format(input));
-        } else {
-            sqlTextArea.setText(SqlFormatter.minify(input));
+        try {
+            sqlTextArea.setText(prettify ? SqlFormatter.format(input) : SqlFormatter.minify(input));
+        } catch (IllegalArgumentException ex) {
+            javax.swing.JOptionPane.showMessageDialog(this, ex.getMessage(), "SQL 格式化失败", javax.swing.JOptionPane.ERROR_MESSAGE);
         }
     }
 }

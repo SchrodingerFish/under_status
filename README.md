@@ -56,24 +56,24 @@ Connects directly with the **QWeather API** for both city-level and high-precisi
 ---
 
 ### 3. 🧰 High-Performance Developer Toolbox
-Contains 15+ built-in developer tools, each refactored for minimal memory allocation and zero UI freezing:
+Contains 15+ developer tools. Regex and Diff run in the background with explicit input and result budgets:
 
 | Tool Module | Features & Performance Architecture |
 | :--- | :--- |
-| **Text Diff Comparator** | • **Unified Diff** & **Side-by-Side Dual Pane** views.<br>• **Prefix/Suffix Common Pruning** before Longest Common Subsequence (LCS) dynamic programming. Shrinks the DP matrix by **99.9%** for typical file edits, completing diffs on thousands of lines in milliseconds.<br>• Batched styled document insertion eliminates Swing text layout lag. |
-| **JSON Formatter** | • Prettify, Minify, Java string Escape, and Unescape.<br>• Pre-sized `StringBuilder` buffers and static multi-level indentation cache avoid string re-allocations. |
-| **XML Prettifier** | • Indented prettification and minification with built-in XXE protection.<br>• Reuses a thread-safe static `TransformerFactory` instance (eliminating repeated 20-50ms JAXP ServiceLoader lookups). |
-| **SQL Formatter** | • Keyword auto-capitalization and structured statement indentation.<br>• Single-pass regex substitution replaces multiple sequential full-text replaces. |
-| **Cron Expression Explainer** | • Plain-text semantic explanation for 6/7-part cron expressions.<br>• **BitSet mask fast-skipping algorithm** calculates next N fire times in microseconds. |
-| **JWT Diagnostic Analyzer** | • Decodes Header and Payload claims with Base64URL support.<br>• Real-time expiration countdown and validity status.<br>• Precompiled regex claim patterns and **120ms typing debounce**. |
-| **Regex Tester** | • Live multi-line regex matching, syntax highlighting, and capture group inspection.<br>• **120ms debounce** + 500-match truncation protect the Swing UI from wide-open regex hangs. |
+| **Text Diff Comparator** | • Unified preview and side-by-side views (not patch output).<br>• Background LCS with common-prefix/suffix pruning; large changed regions use whole-region replacements.<br>• Each input: 2 million characters / 50,000 lines. Preview and copy: 2,000 lines / 200,000 characters. |
+| **JSON Formatter** | • Validates JSON before prettifying/minifying; includes Escape/Unescape.<br>• Maximum 2 million input characters and 128 nesting levels. |
+| **XML Prettifier** | • Rejects DOCTYPE and external entities.<br>• Preserves mixed content, xml:space and potentially meaningful whitespace, including in compact mode. |
+| **SQL Formatter** | • Formats keywords and whitespace while protecting literals, quoted identifiers, dollar quotes and comments. |
+| **Cron Expression Explainer** | • Five fields use UNIX; six/seven fields use Quartz weekday numbering.<br>• Names, lists, ranges, positive steps and years 1970–2199. Unsupported L/W/# syntax is rejected. |
+| **JWT Diagnostic Analyzer** | • Parses top-level JSON claims, including audience arrays and time diagnostics.<br>• Does not verify signatures; missing exp does not imply permanent validity. |
+| **Regex Tester** | • Background Java regex evaluation with cancellable input-access budget and 120ms debounce.<br>• Pattern/replacement: 4,096 characters. Input/output: 200,000 characters. At most 500 matches; excessive work is rejected. |
 | **Hash Calculator** | • Concurrent calculation of MD5, SHA-1, SHA-256, and SHA-512.<br>• Zero-allocation hex formatting via static lookup table + **150ms debounce**. |
 | **Encoding Converter** | • Unicode escapes (`\uXXXX`) conversion using bit-shift hex lookups.<br>• ASCII code points bidirectional conversion. |
 | **Utils & Timestamp** | • Base64 / URL encode & decode with swap button.<br>• **Intelligent Timestamp Detection**: Auto-detects 10-digit (seconds) vs 13-digit (milliseconds) Unix timestamps, calculating human-readable relative time (e.g. *Just now*, *3 minutes ago*). |
 | **Text Cleaner & Case Converter** | • Case conversions: `snake_case`, `camelCase`, `PascalCase`, `kebab-case`, `UPPER`, `lower`.<br>• Line trim, deduplication, A-Z sort, find & replace.<br>• Zero-allocation single-pass $O(N)$ linear character scan for line, char, and word counts. |
 | **Mock Data Generator** | • Generates standard UUIDs, 32-bit hyphen-free UUIDs (direct long-to-hex), 16-char secure passwords, 6-digit verification codes, mock phone numbers, IPv4 addresses, test emails, and timestamps.<br>• Powered by `ThreadLocalRandom` for zero thread contention. |
 | **Color Picker & Palette** | • Real-time bidirectional conversion between Hex, RGB, and HSL formats.<br>• Developer quick-palette swatches (click to copy) + native `JColorChooser` integration. |
-| **Multi-Tab Notebook** | • Sidebar note manager supporting multiple notes with rename, add, and delete.<br>• **500ms delayed flush debounce** eliminates redundant disk/registry I/O while typing. |
+| **Multi-Tab Notebook** | • Multiple notes with rename, add and delete; 500ms save debounce.<br>• Versioned files with checksums, atomic replacement and backups. Legacy preferences are retained; failed saves keep the window open. |
 | **Scientific Calculator** | • Recursive-descent expression evaluator supporting `+`, `-`, `*`, `/`, `%`, and parentheses grouping.<br>• Integrated with both on-screen keypad and physical keyboard Enter key. |
 
 ---
@@ -139,7 +139,7 @@ target/nbm/understatus.nbm
    - **Auto-Location**: Resolves your location automatically based on IP address.
    - **Manual City**: Enter a target city name (e.g. `Beijing`, `Shanghai`, `Tokyo`, `New York`) or a Location ID.
    - **Data Mode**: Toggle between standard city forecasts and high-precision grid forecasts.
-4. Settings are stored securely within NetBeans' native `NbPreferences` store and are never logged or exposed.
+4. Ordinary settings use `NbPreferences`; API keys use NetBeans Keyring. Notes, favorites and alarms use versioned files under the NetBeans user directory at `config/understatus/documents`. Legacy preferences are retained during migration.
 
 ### 2. Reset Preferences
 If you wish to restore default settings:
@@ -151,9 +151,9 @@ If you wish to restore default settings:
 ## 🏎️ Performance Highlights
 
 Version 1.1.0 introduces comprehensive performance optimizations across all modules:
-1. **LCS Diff Prefix/Suffix Pruning**: Trimming identical lines from the top and bottom before building the LCS dynamic programming matrix reduces memory footprint by 99.9% and yields speedups over **1000x** on typical code files.
-2. **EDT Typing Debounce**: All interactive text inputs (Regex, JWT, Hash, Notes, Text Metrics) employ intelligent 120ms–500ms debounce timers, keeping the Swing Event Dispatch Thread (EDT) completely fluid during rapid typing.
-3. **Zero Garbage Collection Churn**: Character-by-character linear scans, static lookup tables (`HEX_CHARS`), and pre-sized buffers replace transient object allocations and boxing across all converters.
+1. **Bounded Diff**: Prefix/suffix pruning improves localized edits. Large changed regions use whole-region replacements; no fixed speedup is promised.
+2. **Background work and debounce**: Regex and Diff run off the EDT. Latest requests win; debounce reduces redundant work but is not itself a timeout.
+3. **Resource budgets**: Caches, network bodies, JSON nesting and tool input have explicit bounds. Interactive behavior still needs validation inside the target IDE.
 
 ---
 

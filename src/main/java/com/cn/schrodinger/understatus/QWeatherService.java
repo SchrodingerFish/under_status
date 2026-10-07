@@ -34,8 +34,9 @@ public final class QWeatherService {
             boolean autoIp) throws WeatherException {
         QWeatherConfig config = config(apiHost, apiKey);
         LocationContext location = DATA.resolve(config, cityName, autoIp, false);
-        WeatherNow weather = DATA.now(config, location, false).value();
-        return location.name() + " " + emoji(weather.condition()) + " " + weather.condition()
+        WeatherDataService.Result<WeatherNow> result = DATA.now(config, location, false);
+        WeatherNow weather = result.value();
+        return (result.stale() ? "⚠ 缓存已过期 · " : "") + location.name() + " " + emoji(weather.condition()) + " " + weather.condition()
                 + " " + weather.temperatureCelsius() + "°C";
     }
 

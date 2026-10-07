@@ -37,6 +37,17 @@ public record QWeatherConfig(String apiHost, String apiKey, String language, Str
         return !apiHost.isEmpty() && !apiKey.isEmpty();
     }
 
+    public String cacheIdentity() {
+        try {
+            byte[] bytes = (apiHost + "\n" + apiKey).getBytes(StandardCharsets.UTF_8);
+            return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
+        } catch (java.security.NoSuchAlgorithmException ex) { throw new IllegalStateException(ex); }
+    }
+
+    @Override public String toString() {
+        return "QWeatherConfig[apiHost=" + apiHost + ", apiKey=<redacted>, language=" + language + ", unit=" + unit + "]";
+    }
+
     public URI endpoint(String path, Map<String, String> query) {
         Objects.requireNonNull(path, "path");
         if (!path.startsWith("/") || path.contains("?") || path.contains("#")) {
