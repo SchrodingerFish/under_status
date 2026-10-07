@@ -29,6 +29,9 @@ public final class EditorMetricsTracker implements AutoCloseable {
     };
     private Document currentDocument;
     private boolean started;
+    private long generation;
+    private String currentEncoding = "";
+    private EditorMetrics lastPublished;
 
     public EditorMetricsTracker(Consumer<EditorMetrics> consumer) {
         this.consumer = Objects.requireNonNull(consumer);
@@ -41,11 +44,13 @@ public final class EditorMetricsTracker implements AutoCloseable {
             return;
         }
         started = true;
+        generation++;
         EditorRegistry.addPropertyChangeListener(editorListener);
         switchDocument(EditorRegistry.lastFocusedComponent());
     }
 
     public void refreshNow() {
+        if (!started) return;
         JTextComponent editor = EditorRegistry.lastFocusedComponent();
         if (editor == null || editor.getDocument() != currentDocument) {
             switchDocument(editor);
@@ -70,7 +75,10 @@ public final class EditorMetricsTracker implements AutoCloseable {
                 || EditorRegistry.FOCUSED_DOCUMENT_PROPERTY.equals(name)
                 || EditorRegistry.COMPONENT_REMOVED_PROPERTY.equals(name)
                 || EditorRegistry.LAST_FOCUSED_REMOVED_PROPERTY.equals(name)) {
-            SwingUtilities.invokeLater(() -> switchDocument(EditorRegistry.lastFocusedComponent()));
+            long token = generation;
+            SwingUtilities.invokeLater(() -> {
+                if (started && generation == token) switchDocument(EditorRegistry.lastFocusedComponent());
+            });
         }
     }
 
@@ -83,21 +91,27 @@ public final class EditorMetricsTracker implements AutoCloseable {
             next.addDocumentListener(documentListener);
         }
         currentDocument = next;
+        currentEncoding = next == null ? "" : DocumentUtils.getFileEncoding(next);
         publish(currentDocument);
     }
 
     private void publish(Document document) {
         EditorMetrics metrics = document == null
                 ? EditorMetrics.unavailable()
-                : calculate(document, DocumentUtils.getFileEncoding(document));
+                : calculate(document, currentEncoding);
+        if (metrics.equals(lastPublished)) return;
+        lastPublished = metrics;
         deliver(metrics);
     }
 
     private void deliver(EditorMetrics metrics) {
+        long token = generation;
         if (SwingUtilities.isEventDispatchThread()) {
             consumer.accept(metrics);
         } else {
-            SwingUtilities.invokeLater(() -> consumer.accept(metrics));
+            SwingUtilities.invokeLater(() -> {
+                if (started && generation == token) consumer.accept(metrics);
+            });
         }
     }
 
@@ -113,6 +127,8 @@ public final class EditorMetricsTracker implements AutoCloseable {
             return;
         }
         started = false;
+        generation++;
+        lastPublished = null;
         debounceTimer.stop();
         EditorRegistry.removePropertyChangeListener(editorListener);
         if (currentDocument != null) {

@@ -2,6 +2,12 @@ package com.cn.schrodinger.understatus.weather;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.ByteArrayOutputStream;
+import java.nio.ByteBuffer;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Flow;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -14,9 +20,11 @@ import java.util.zip.GZIPInputStream;
 
 public final class JdkHttpTransport implements HttpTransport {
 
+    static final int MAX_BODY_BYTES = 2 * 1024 * 1024;
+
     private final HttpClient client = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(5))
-            .followRedirects(HttpClient.Redirect.NORMAL)
+            .followRedirects(HttpClient.Redirect.NEVER)
             .build();
 
     @Override
@@ -29,17 +37,27 @@ public final class JdkHttpTransport implements HttpTransport {
         HttpRequest request = buildRequest(uri, headers);
         try {
             HttpResponse<byte[]> response = client.send(
-                    request, HttpResponse.BodyHandlers.ofByteArray());
+                    request, responseInfo -> new LimitedBodySubscriber());
             String encoding = response.headers().firstValue("Content-Encoding").orElse("");
-            String body = decodeBody(response.body(), encoding);
+            String body;
+            try {
+                body = decodeBody(response.body(), encoding);
+            } catch (IOException ex) {
+                throw new WeatherException(WeatherException.Kind.RESPONSE, "天气响应压缩数据无效或过大", ex);
+            }
             requireSuccess(response.statusCode(), body);
             return body;
         } catch (HttpTimeoutException ex) {
             throw new WeatherException(WeatherException.Kind.TIMEOUT, "天气请求超时", ex);
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
-            throw new WeatherException(WeatherException.Kind.NETWORK, "天气请求已中断", ex);
+            throw new WeatherException(WeatherException.Kind.CANCELLED, "天气请求已中断", ex);
         } catch (IOException ex) {
+            for (Throwable cause = ex; cause != null; cause = cause.getCause()) {
+                if (cause instanceof BodyTooLargeException) {
+                    throw new WeatherException(WeatherException.Kind.RESPONSE, "天气响应过大", ex);
+                }
+            }
             throw new WeatherException(WeatherException.Kind.NETWORK, "天气服务暂时不可用", ex);
         }
     }
@@ -66,14 +84,48 @@ public final class JdkHttpTransport implements HttpTransport {
     }
 
     static String decodeBody(byte[] body, String contentEncoding) throws IOException {
+        if (body.length > MAX_BODY_BYTES) throw new BodyTooLargeException();
         byte[] decoded = body;
         if (contentEncoding != null
                 && contentEncoding.toLowerCase(java.util.Locale.ROOT).contains("gzip")) {
             try (GZIPInputStream input = new GZIPInputStream(new ByteArrayInputStream(body))) {
-                decoded = input.readAllBytes();
+                decoded = input.readNBytes(MAX_BODY_BYTES + 1);
+                if (decoded.length > MAX_BODY_BYTES) throw new BodyTooLargeException();
             }
         }
         return new String(decoded, StandardCharsets.UTF_8);
+    }
+
+    static final class LimitedBodySubscriber implements HttpResponse.BodySubscriber<byte[]> {
+        private final CompletableFuture<byte[]> body = new CompletableFuture<>();
+        private final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        private Flow.Subscription subscription;
+
+        @Override public CompletionStage<byte[]> getBody() { return body; }
+        @Override public void onSubscribe(Flow.Subscription value) {
+            subscription = value;
+            value.request(1);
+        }
+        @Override public void onNext(List<ByteBuffer> buffers) {
+            if (body.isDone()) return;
+            for (ByteBuffer buffer : buffers) {
+                if (buffer.remaining() > MAX_BODY_BYTES - bytes.size()) {
+                    subscription.cancel();
+                    body.completeExceptionally(new BodyTooLargeException());
+                    return;
+                }
+                byte[] chunk = new byte[buffer.remaining()];
+                buffer.get(chunk);
+                bytes.writeBytes(chunk);
+            }
+            subscription.request(1);
+        }
+        @Override public void onError(Throwable error) { body.completeExceptionally(error); }
+        @Override public void onComplete() { body.complete(bytes.toByteArray()); }
+    }
+
+    private static final class BodyTooLargeException extends IOException {
+        BodyTooLargeException() { super("Weather response exceeds byte limit"); }
     }
 
     static void requireSuccess(int statusCode) throws WeatherException {
@@ -95,7 +147,7 @@ public final class JdkHttpTransport implements HttpTransport {
             case 404 -> WeatherException.Kind.NOT_FOUND;
             case 429 -> WeatherException.Kind.RATE_LIMIT;
             default -> statusCode >= 500
-                    ? WeatherException.Kind.UNAVAILABLE : WeatherException.Kind.NETWORK;
+                    ? WeatherException.Kind.UNAVAILABLE : WeatherException.Kind.RESPONSE;
         };
         throw new WeatherException(kind, messageFor(statusCode), statusCode);
     }

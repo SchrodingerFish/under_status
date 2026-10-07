@@ -11,6 +11,7 @@ public final class WeatherException extends Exception {
         RATE_LIMIT,
         UNSUPPORTED,
         TIMEOUT,
+        CANCELLED,
         NETWORK,
         UNAVAILABLE,
         RESPONSE

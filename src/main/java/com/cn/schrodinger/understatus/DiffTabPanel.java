@@ -1,12 +1,24 @@
 package com.cn.schrodinger.understatus;
 
 import com.cn.schrodinger.understatus.toolbox.core.DiffCalculator;
-import javax.swing.*;
-import javax.swing.text.Style;
+import com.cn.schrodinger.understatus.toolbox.core.ToolTask;
+import javax.swing.BorderFactory;
+import javax.swing.JButton;
+import javax.swing.JComboBox;
+import javax.swing.JLabel;
+import javax.swing.JPanel;
+import javax.swing.JScrollPane;
+import javax.swing.JSplitPane;
+import javax.swing.JTextArea;
+import javax.swing.JTextPane;
+import javax.swing.UIManager;
 import javax.swing.text.StyleConstants;
 import javax.swing.text.StyledDocument;
-import java.awt.*;
-import java.util.List;
+import java.awt.BorderLayout;
+import java.awt.Color;
+import java.awt.FlowLayout;
+import java.awt.Font;
+import java.awt.GridLayout;
 
 /**
  * Enhanced Diff Tab Panel.
@@ -17,6 +29,8 @@ import java.util.List;
  */
 public class DiffTabPanel extends JPanel {
 
+    private final ToolTask tasks = new ToolTask(this);
+    private DiffCalculator.Result latest;
     private JTextArea textAreaA;
     private JTextArea textAreaB;
 
@@ -34,6 +48,8 @@ public class DiffTabPanel extends JPanel {
 
     public DiffTabPanel() {
         initComponents();
+        tasks.watch(textAreaA, () -> latest = null);
+        tasks.watch(textAreaB, () -> latest = null);
     }
 
     private void initComponents() {
@@ -112,6 +128,7 @@ public class DiffTabPanel extends JPanel {
             }
             diffViewerContainer.revalidate();
             diffViewerContainer.repaint();
+            renderActiveView();
         });
         leftControls.add(viewModeCombo);
 
@@ -140,6 +157,8 @@ public class DiffTabPanel extends JPanel {
         JButton clearBtn = new JButton("清空");
         clearBtn.setFont(new Font("SansSerif", Font.PLAIN, 11));
         clearBtn.addActionListener(e -> {
+            tasks.cancel();
+            latest = null;
             textAreaA.setText("");
             textAreaB.setText("");
             unifiedDiffPane.setText("");
@@ -167,135 +186,74 @@ public class DiffTabPanel extends JPanel {
     }
 
     private void triggerComparison() {
-        String textA = textAreaA.getText();
-        String textB = textAreaB.getText();
+        latest = null;
+        try {
+            String textA = ToolTask.snapshot(textAreaA);
+            String textB = ToolTask.snapshot(textAreaB);
+            statLabel.setText("正在比较…");
+            tasks.submit(() -> DiffCalculator.calculateDetailed(textA, textB), result -> {
+                latest = result;
+                renderActiveView();
+            }, error -> statLabel.setText("比较失败: " + error));
+        } catch (IllegalArgumentException ex) {
+            tasks.cancel();
+            statLabel.setText(ex.getMessage());
+        }
+    }
 
-        List<DiffCalculator.DiffLine> diffs = DiffCalculator.calculateDiff(textA, textB);
-        renderUnifiedDiff(diffs);
-        renderSideBySideDiff(diffs);
+    private record Rendered(StyledDocument first, StyledDocument second, String summary) {}
 
+    private void renderActiveView() {
+        if (latest == null) return;
+        DiffCalculator.Result result = latest;
+        boolean sideBySide = viewModeCombo.getSelectedIndex() != 0;
+        boolean dark = isDarkTheme();
+        tasks.submit(() -> render(result, sideBySide, dark), rendered -> {
+            if (sideBySide) {
+                sideAPane.setDocument(rendered.first());
+                sideBPane.setDocument(rendered.second());
+            } else unifiedDiffPane.setDocument(rendered.first());
+            statLabel.setText(rendered.summary());
+        }, error -> statLabel.setText("显示失败: " + error));
+    }
+
+    private static Rendered render(DiffCalculator.Result result, boolean side, boolean dark) throws javax.swing.text.BadLocationException {
+        var first = new javax.swing.text.DefaultStyledDocument();
+        var second = new javax.swing.text.DefaultStyledDocument();
         int additions = 0, deletions = 0, unchanged = 0;
-        for (DiffCalculator.DiffLine d : diffs) {
-            if (d.type == 1) additions++;
-            else if (d.type == -1) deletions++;
+        for (var line : result.lines()) {
+            if (line.type == 1) additions++;
+            else if (line.type == -1) deletions++;
             else unchanged++;
         }
-        statLabel.setText(String.format("差异统计: +%d 行新增, -%d 行删除, %d 行一致",
-                additions, deletions, unchanged));
+        int shown = 0, chars = 0, aNo = 1, bNo = 1;
+        for (var line : result.lines()) {
+            com.cn.schrodinger.understatus.toolbox.core.ToolLimits.checkInterrupted();
+            if (shown >= 1000 || chars + line.text.length() > 100_000) break;
+            chars += line.text.length();
+            shown++;
+            if (side) {
+                appendLine(first, line.type == 1 ? "     |\n" : aNo++ + " | " + line.text + "\n", line.type == -1 ? -1 : 0, dark);
+                appendLine(second, line.type == -1 ? "     |\n" : bNo++ + " | " + line.text + "\n", line.type == 1 ? 1 : 0, dark);
+            } else appendLine(first, shown + " | " + line.text + "\n", line.type, dark);
+        }
+        String summary = "+" + additions + " / -" + deletions + " / =" + unchanged;
+        if (result.coarse()) summary += "；变更区过大，按整段删除/新增显示（非最小差异）";
+        if (shown < result.lines().size()) {
+            summary += "；仅显示前 " + shown + " 行（上限 1,000 行 / 100,000 字符）";
+            appendLine(first, "\n[显示已截断]\n", 0, dark);
+            if (side) appendLine(second, "\n[显示已截断]\n", 0, dark);
+        }
+        return new Rendered(first, second, summary);
     }
 
-    private void renderUnifiedDiff(List<DiffCalculator.DiffLine> diffs) {
-        unifiedDiffPane.setText("");
-        StyledDocument doc = unifiedDiffPane.getStyledDocument();
-        boolean isDark = isDarkTheme();
-
-        Style defStyle = unifiedDiffPane.addStyle("def", null);
-        StyleConstants.setForeground(defStyle, isDark ? new Color(200, 210, 225) : new Color(40, 50, 70));
-
-        Style addStyle = unifiedDiffPane.addStyle("add", null);
-        StyleConstants.setForeground(addStyle, isDark ? new Color(82, 196, 26) : new Color(34, 139, 34));
-        StyleConstants.setBackground(addStyle, isDark ? new Color(30, 60, 30, 160) : new Color(230, 255, 230));
-
-        Style delStyle = unifiedDiffPane.addStyle("del", null);
-        StyleConstants.setForeground(delStyle, isDark ? new Color(255, 77, 79) : new Color(205, 38, 38));
-        StyleConstants.setBackground(delStyle, isDark ? new Color(70, 30, 30, 160) : new Color(255, 230, 230));
-
-        try {
-            int lineNo = 1;
-            Style currentStyle = null;
-            StringBuilder batchText = new StringBuilder();
-
-            for (DiffCalculator.DiffLine line : diffs) {
-                Style style = defStyle;
-                if (line.type == 1) {
-                    style = addStyle;
-                } else if (line.type == -1) {
-                    style = delStyle;
-                }
-
-                // If style changed, flush existing batch
-                if (currentStyle != null && style != currentStyle) {
-                    doc.insertString(doc.getLength(), batchText.toString(), currentStyle);
-                    batchText.setLength(0);
-                }
-                currentStyle = style;
-                batchText.append(String.format("%4d | %s\n", lineNo++, line.text));
-            }
-            if (batchText.length() > 0 && currentStyle != null) {
-                doc.insertString(doc.getLength(), batchText.toString(), currentStyle);
-            }
-        } catch (Exception ignored) {}
-    }
-
-    private void renderSideBySideDiff(List<DiffCalculator.DiffLine> diffs) {
-        sideAPane.setText("");
-        sideBPane.setText("");
-        StyledDocument docA = sideAPane.getStyledDocument();
-        StyledDocument docB = sideBPane.getStyledDocument();
-        boolean isDark = isDarkTheme();
-
-        Style defStyleA = sideAPane.addStyle("defA", null);
-        StyleConstants.setForeground(defStyleA, isDark ? new Color(200, 210, 225) : new Color(40, 50, 70));
-        Style delStyleA = sideAPane.addStyle("delA", null);
-        StyleConstants.setForeground(delStyleA, isDark ? new Color(255, 77, 79) : new Color(205, 38, 38));
-        StyleConstants.setBackground(delStyleA, isDark ? new Color(70, 30, 30, 160) : new Color(255, 230, 230));
-
-        Style defStyleB = sideBPane.addStyle("defB", null);
-        StyleConstants.setForeground(defStyleB, isDark ? new Color(200, 210, 225) : new Color(40, 50, 70));
-        Style addStyleB = sideBPane.addStyle("addB", null);
-        StyleConstants.setForeground(addStyleB, isDark ? new Color(82, 196, 26) : new Color(34, 139, 34));
-        StyleConstants.setBackground(addStyleB, isDark ? new Color(30, 60, 30, 160) : new Color(230, 255, 230));
-
-        try {
-            int aNo = 1, bNo = 1;
-            StringBuilder bufA = new StringBuilder();
-            StringBuilder bufB = new StringBuilder();
-            Style lastStyleA = null;
-            Style lastStyleB = null;
-
-            for (DiffCalculator.DiffLine line : diffs) {
-                Style styleA, styleB;
-                String textA, textB;
-
-                if (line.type == -1) { // Only in A
-                    styleA = delStyleA;
-                    textA = String.format("%4d | %s\n", aNo++, line.text);
-                    styleB = defStyleB;
-                    textB = String.format("%4d |\n", bNo++);
-                } else if (line.type == 1) { // Only in B
-                    styleA = defStyleA;
-                    textA = String.format("%4d |\n", aNo++);
-                    styleB = addStyleB;
-                    textB = String.format("%4d | %s\n", bNo++, line.text);
-                } else { // Unchanged
-                    styleA = defStyleA;
-                    textA = String.format("%4d | %s\n", aNo++, line.text);
-                    styleB = defStyleB;
-                    textB = String.format("%4d | %s\n", bNo++, line.text);
-                }
-
-                if (lastStyleA != null && styleA != lastStyleA) {
-                    docA.insertString(docA.getLength(), bufA.toString(), lastStyleA);
-                    bufA.setLength(0);
-                }
-                lastStyleA = styleA;
-                bufA.append(textA);
-
-                if (lastStyleB != null && styleB != lastStyleB) {
-                    docB.insertString(docB.getLength(), bufB.toString(), lastStyleB);
-                    bufB.setLength(0);
-                }
-                lastStyleB = styleB;
-                bufB.append(textB);
-            }
-
-            if (bufA.length() > 0 && lastStyleA != null) {
-                docA.insertString(docA.getLength(), bufA.toString(), lastStyleA);
-            }
-            if (bufB.length() > 0 && lastStyleB != null) {
-                docB.insertString(docB.getLength(), bufB.toString(), lastStyleB);
-            }
-        } catch (Exception ignored) {}
+    private static void appendLine(StyledDocument document, String text, int type, boolean dark) throws javax.swing.text.BadLocationException {
+        var attributes = new javax.swing.text.SimpleAttributeSet();
+        Color foreground = type == 1 ? (dark ? new Color(82, 196, 26) : new Color(34, 139, 34))
+                : type == -1 ? (dark ? new Color(255, 77, 79) : new Color(205, 38, 38))
+                : dark ? new Color(200, 210, 225) : new Color(40, 50, 70);
+        StyleConstants.setForeground(attributes, foreground);
+        document.insertString(document.getLength(), text, attributes);
     }
 
     private boolean isDarkTheme() {

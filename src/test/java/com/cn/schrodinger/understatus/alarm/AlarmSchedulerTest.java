@@ -11,6 +11,16 @@ import org.junit.jupiter.api.Test;
 class AlarmSchedulerTest {
 
     @Test
+    void catchesUpWhenEventThreadMissesAlarmMinute() {
+        Alarm alarm = Alarm.once("12:00", "break");
+        AlarmScheduler scheduler = new AlarmScheduler();
+        LocalDateTime noon = LocalDateTime.of(2026, 10, 7, 12, 0);
+        assertTrue(scheduler.dueAlarms(List.of(alarm), noon.minusMinutes(1)).isEmpty());
+        assertEquals(List.of(alarm), scheduler.dueAlarms(List.of(alarm), noon.plusMinutes(2)));
+        assertTrue(scheduler.dueAlarms(List.of(alarm), noon.plusMinutes(3)).isEmpty());
+    }
+
+    @Test
     void onceAlarmTriggersOnlyOnceAndDisablesItself() {
         Alarm alarm = Alarm.once("12:00", "午休");
         AlarmScheduler scheduler = new AlarmScheduler();

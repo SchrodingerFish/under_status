@@ -2,6 +2,8 @@ package com.cn.schrodinger.understatus.weather;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -10,6 +12,66 @@ import java.time.ZoneOffset;
 import org.junit.jupiter.api.Test;
 
 class WeatherDataServiceTest {
+
+    @Test
+    void cacheIsScopedToHostAndCredential() throws Exception {
+        FailingTransport transport = new FailingTransport();
+        WeatherDataService service = service(transport);
+        service.now(config(), location(), false);
+        service.now(new QWeatherConfig("other.qweatherapi.com", "secret", "zh", "m"), location(), false);
+        service.now(new QWeatherConfig("abc.def.qweatherapi.com", "new-secret", "zh", "m"), location(), false);
+        assertEquals(3, transport.calls);
+    }
+
+    @Test
+    void failedForcedRefreshRetainsPreviousValue() throws Exception {
+        FailingTransport transport = new FailingTransport();
+        WeatherDataService service = service(transport);
+        WeatherNow original = service.now(config(), location(), false).value();
+        transport.fail = true;
+        transport.failureKind = WeatherException.Kind.AUTHENTICATION;
+        WeatherDataService.Result<WeatherNow> refreshed = service.now(config(), location(), true);
+        assertTrue(refreshed.stale());
+        assertEquals(original, refreshed.value());
+        assertTrue(service.now(config(), location(), false).stale());
+    }
+
+    @Test
+    void automaticIpLocationRefreshesAfterThirtyMinutes() throws Exception {
+        java.util.concurrent.atomic.AtomicInteger ipCalls = new java.util.concurrent.atomic.AtomicInteger();
+        HttpTransport transport = uri -> {
+            if (uri.getHost().equals("ipwho.is")) {
+                ipCalls.incrementAndGet();
+                return "{\"success\":true,\"city\":\"北京\"}";
+            }
+            return "{\"code\":\"200\",\"location\":[{\"id\":\"101010100\",\"name\":\"北京\","
+                    + "\"lon\":\"116.41\",\"lat\":\"39.92\",\"tz\":\"Asia/Shanghai\"}]}";
+        };
+        MutableClock clock = new MutableClock();
+        WeatherDataService service = new WeatherDataService(new QWeatherClient(transport),
+                new LocationResolver(transport), new WeatherCache(clock));
+        service.resolve(config(), "北京", true, false);
+        service.resolve(config(), "北京", true, false);
+        assertEquals(1, ipCalls.get());
+        clock.instant = clock.instant.plus(Duration.ofMinutes(31));
+        service.resolve(config(), "北京", true, false);
+        assertEquals(2, ipCalls.get());
+    }
+
+    @Test
+    void preInterruptedRequestDoesNotReturnCacheOrRetry() throws Exception {
+        FailingTransport transport = new FailingTransport();
+        WeatherDataService service = service(transport);
+        service.now(config(), location(), false);
+        Thread.currentThread().interrupt();
+        try {
+            assertThrows(WeatherException.class, () -> service.now(config(), location(), false));
+            assertTrue(Thread.currentThread().isInterrupted());
+            assertEquals(1, transport.calls);
+        } finally {
+            Thread.interrupted();
+        }
+    }
 
     @Test
     void cachesCurrentWeatherAndFallsBackToStaleValue() throws Exception {

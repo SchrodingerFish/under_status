@@ -1,5 +1,6 @@
 package com.cn.schrodinger.understatus;
 
+import com.cn.schrodinger.understatus.toolbox.core.ToolTask;
 import com.cn.schrodinger.understatus.toolbox.core.JwtDecoder;
 
 import java.awt.BorderLayout;
@@ -21,6 +22,7 @@ import javax.swing.event.DocumentListener;
  * @author peter/antigravity
  */
 public class JwtTabPanel extends JPanel {
+    private final ToolTask tasks = new ToolTask(this);
 
     private JTextArea inputArea;
     private JTextArea outputArea;
@@ -30,6 +32,8 @@ public class JwtTabPanel extends JPanel {
     public JwtTabPanel() {
         debounceTimer.setRepeats(false);
         initComponents();
+        tasks.watch(inputArea);
+        tasks.onShow(this::runJwtDecode);
     }
 
     private void initComponents() {
@@ -86,11 +90,17 @@ public class JwtTabPanel extends JPanel {
     }
 
     private void runJwtDecode() {
-        String token = inputArea.getText().trim();
-        if (token.isEmpty() || token.equals("在此贴入 JWT Token...")) {
-            outputArea.setText("");
-            return;
+        try {
+            String input = ToolTask.snapshot(inputArea);
+            tasks.submit(() -> JwtDecoder.decodeJwt(input), outputArea::setText, error -> outputArea.setText("处理失败: " + error));
+        } catch (IllegalArgumentException ex) {
+            tasks.cancel();
+            outputArea.setText(ex.getMessage());
         }
-        outputArea.setText(JwtDecoder.decodeJwt(token));
+    }
+    @Override public void removeNotify() {
+        debounceTimer.stop();
+        tasks.cancel();
+        super.removeNotify();
     }
 }

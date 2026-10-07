@@ -5,13 +5,13 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * Ultra-fast LCS (Longest Common Subsequence) diff calculator.
- * Features common prefix and suffix pruning to shrink the DP table from O(N*M) to O(D^2),
- * and O(1) backtracking appends, providing orders-of-magnitude speedup and minimal memory usage.
- *
- * @author peter/antigravity
+ * Line diff with prefix/suffix pruning and a bounded LCS table.
+ * Large changed regions fall back to deterministic deletions followed by additions.
  */
 public class DiffCalculator {
+    public static final long MAX_DP_CELLS = 1_000_000;
+    public static final int MAX_LINES = 20_000;
+    public record Result(List<DiffLine> lines, boolean coarse) {}
 
     public static class DiffLine {
         public final int type; // 0 = unchanged, 1 = added, -1 = deleted
@@ -24,15 +24,22 @@ public class DiffCalculator {
     }
 
     public static List<DiffLine> calculateDiff(String textA, String textB) {
+        return calculateDetailed(textA, textB).lines();
+    }
+
+    public static Result calculateDetailed(String textA, String textB) {
+        ToolLimits.input(textA);
+        ToolLimits.input(textB);
         String[] linesA = (textA == null || textA.isEmpty()) ? new String[0] : textA.split("\\r?\\n", -1);
         String[] linesB = (textB == null || textB.isEmpty()) ? new String[0] : textB.split("\\r?\\n", -1);
 
         int n = linesA.length;
         int m = linesB.length;
+        if (n > MAX_LINES || m > MAX_LINES) throw new IllegalArgumentException("差异比较每侧最多 20,000 行");
 
         // 1. Fast path: Both empty
         if (n == 0 && m == 0) {
-            return Collections.emptyList();
+            return new Result(List.of(), false);
         }
 
         List<DiffLine> result = new ArrayList<>();
@@ -59,10 +66,15 @@ public class DiffCalculator {
         int subLenA = endA - start + 1;
         int subLenB = endB - start + 1;
 
-        if (subLenA > 0 && subLenB > 0) {
+        boolean coarse = (long) (subLenA + 1) * (subLenB + 1) > MAX_DP_CELLS;
+        if (coarse) {
+            for (int k = start; k <= endA; k++) result.add(new DiffLine(-1, "- " + linesA[k]));
+            for (int k = start; k <= endB; k++) result.add(new DiffLine(1, "+ " + linesB[k]));
+        } else if (subLenA > 0 && subLenB > 0) {
             // Compute LCS on middle slice only
             int[][] dp = new int[subLenA + 1][subLenB + 1];
             for (int i = 1; i <= subLenA; i++) {
+                ToolLimits.checkInterrupted();
                 String lineA = linesA[start + i - 1];
                 for (int j = 1; j <= subLenB; j++) {
                     if (lineA.equals(linesB[start + j - 1])) {
@@ -106,6 +118,6 @@ public class DiffCalculator {
         // 5. Append suffix
         result.addAll(suffix);
 
-        return result;
+        return new Result(List.copyOf(result), coarse);
     }
 }

@@ -2,10 +2,9 @@ package com.cn.schrodinger.understatus;
 
 import com.cn.schrodinger.understatus.music.LrcParser;
 import com.cn.schrodinger.understatus.music.MusicApiClient;
-import com.cn.schrodinger.understatus.music.MusicAudioPlayer;
 import com.cn.schrodinger.understatus.music.MusicSong;
+import com.cn.schrodinger.understatus.music.MusicSession;
 import com.cn.schrodinger.understatus.music.PlaybackMode;
-import com.cn.schrodinger.understatus.settings.SettingsRepository;
 
 import java.awt.BorderLayout;
 import java.awt.Color;
@@ -15,40 +14,27 @@ import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
-import java.awt.Image;
 import java.awt.Insets;
 import java.awt.Rectangle;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
-import java.io.InputStream;
-import java.net.HttpURLConnection;
-import java.net.URI;
-import java.net.URL;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
-import java.util.Map;
-import java.util.Random;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.logging.Level;
-import java.util.logging.Logger;
-import javax.imageio.ImageIO;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import javax.swing.BorderFactory;
 import javax.swing.DefaultListCellRenderer;
 import javax.swing.DefaultListModel;
-import javax.swing.ImageIcon;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
 import javax.swing.JLabel;
 import javax.swing.JList;
 import javax.swing.JMenuItem;
-import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JPopupMenu;
 import javax.swing.JProgressBar;
 import javax.swing.JScrollPane;
-import javax.swing.JSlider;
-import javax.swing.JSplitPane;
 import javax.swing.JTabbedPane;
 import javax.swing.JTable;
 import javax.swing.JTextField;
@@ -59,42 +45,36 @@ import javax.swing.SwingUtilities;
 import javax.swing.UIManager;
 import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.DefaultTableModel;
-import org.openide.util.RequestProcessor;
 
 /**
  * Swing Music Player panel supporting online search, audio streaming, playlist queue,
  * favorites persistence, playback mode switching, and LRC lyric synchronization.
  */
-public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerListener {
+public class MusicTabPanel extends JPanel implements AutoCloseable {
 
-    private static final Logger LOGGER = Logger.getLogger(MusicTabPanel.class.getName());
-    private static final RequestProcessor ASYNC_WORKER = new RequestProcessor("MusicTabPanel Worker", 4, true);
-
-    // API & Player Engine
     private final MusicApiClient apiClient = new MusicApiClient();
-    private final MusicAudioPlayer audioPlayer = new MusicAudioPlayer();
-    private final Random random = new Random();
-
-    // Data lists & Cache
+    private MusicSession session;
+    private MusicSession.Subscription subscription;
+    private ExecutorService searchWorker;
+    private Future<?> searchRequest;
+    private long searchGeneration;
     private final List<MusicSong> searchResults = new ArrayList<>();
     private final List<MusicSong> playlist = new ArrayList<>();
     private final List<MusicSong> favorites = new ArrayList<>();
-    private List<LrcParser.LrcLine> currentLyrics = new ArrayList<>();
-
-    private final Map<String, ImageIcon> coverCache = new ConcurrentHashMap<>();
-    private final Map<String, List<LrcParser.LrcLine>> lyricCache = new ConcurrentHashMap<>();
+    private List<LrcParser.LrcLine> currentLyrics = List.of();
     private int lastActiveLyricIndex = -1;
-
-    // Playback state
     private PlaybackMode currentMode = PlaybackMode.LIST_LOOP;
-    private int currentPlayingIndex = -1;
-    private boolean isFavoriteCurrent = false;
+    private MusicSong displayedSong;
+    private String sessionMessage = "";
 
     // Search Bar Components
     private JTextField searchTextField;
     private JComboBox<SourceItem> sourceComboBox;
     private JButton searchButton;
     private JLabel searchStatusLabel;
+    private JLabel favoritesStatusLabel;
+    private JButton retryFavoritesButton;
+    private final List<JMenuItem> favoriteMenuItems = new ArrayList<>();
 
     // Center Tabs & Tables
     private JTabbedPane centerTabbedPane;
@@ -126,10 +106,78 @@ public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerList
     private JProgressBar progressBar;
 
     public MusicTabPanel() {
-        audioPlayer.setListener(this);
-        loadFavoritesFromPreferences();
         initComponents();
-        updateFavoritesTable();
+    }
+
+    @Override public void addNotify() {
+        super.addNotify();
+        if (subscription == null) {
+            searchWorker = Executors.newSingleThreadExecutor(r -> {
+                Thread thread = new Thread(r, "UnderStatus-MusicSearch");
+                thread.setDaemon(true);
+                return thread;
+            });
+            session = MusicSession.shared();
+            subscription = session.subscribe(this::renderSnapshot);
+        }
+    }
+
+    @Override public void removeNotify() {
+        close();
+        super.removeNotify();
+    }
+
+    @Override public void close() {
+        searchGeneration++;
+        if (searchRequest != null) searchRequest.cancel(true);
+        if (searchWorker != null) searchWorker.shutdownNow();
+        if (subscription != null) {
+            subscription.close();
+            subscription = null;
+        }
+        session = null;
+        searchButton.setEnabled(true);
+    }
+
+    private void renderSnapshot(MusicSession.Snapshot state) {
+        if (!playlist.equals(state.playlist())) {
+            playlist.clear();
+            playlist.addAll(state.playlist());
+            updatePlaylistTable();
+        }
+        if (!favorites.equals(state.favorites())) {
+            favorites.clear();
+            favorites.addAll(state.favorites());
+            updateFavoritesTable();
+        }
+        currentMode = state.mode();
+        modeButton.setText(currentMode.getDisplayTitle());
+        playPauseButton.setText(state.playing() ? "⏸️" : "▶️");
+        MusicSong song = state.song();
+        if (song != displayedSong) {
+            displayedSong = song;
+            lastActiveLyricIndex = -1;
+            songTitleLabel.setText(song == null ? "暂无播放曲目" : song.getName());
+            songArtistLabel.setText(song == null ? "等待选择音乐..." : song.getArtist() + " · " + song.getSourceDisplayName());
+        }
+        favoriteButton.setText(song != null && favorites.contains(song) ? "❤️" : "♡");
+        favoriteButton.setEnabled(state.favoritesReady());
+        favoriteMenuItems.forEach(item -> item.setEnabled(state.favoritesReady()));
+        favoritesStatusLabel.setText(state.favoritesMessage());
+        retryFavoritesButton.setVisible(state.favoritesRetryable());
+        retryFavoritesButton.setEnabled(!state.favoritesBusy());
+        coverLabel.setIcon(state.cover());
+        coverLabel.setText(state.cover() == null ? "🎵" : "");
+        if (currentLyrics != state.lyrics()) {
+            currentLyrics = state.lyrics();
+            lastActiveLyricIndex = -1;
+            updateLyricList(currentLyrics);
+        }
+        if (!sessionMessage.equals(state.message())) {
+            sessionMessage = state.message();
+            searchStatusLabel.setText(sessionMessage);
+        }
+        onProgress(state.positionMs());
     }
 
     private static class SourceItem {
@@ -197,6 +245,17 @@ public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerList
         gbc.anchor = GridBagConstraints.WEST;
         searchPanel.add(searchStatusLabel, gbc);
 
+        JPanel favoritesStatus = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        favoritesStatusLabel = new JLabel("正在加载收藏…");
+        favoritesStatusLabel.setFont(favoritesStatusLabel.getFont().deriveFont(11f));
+        favoritesStatus.add(favoritesStatusLabel);
+        retryFavoritesButton = new JButton("重试收藏读写");
+        retryFavoritesButton.addActionListener(e -> { if (session != null) session.retryFavorites(); });
+        retryFavoritesButton.setVisible(false);
+        favoritesStatus.add(retryFavoritesButton);
+        gbc.gridy = 2;
+        searchPanel.add(favoritesStatus, gbc);
+
         add(searchPanel, BorderLayout.NORTH);
 
         // 2. Center Tabs (Search Results, Playlist, Favorites, Lyrics)
@@ -235,8 +294,7 @@ public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerList
         JPanel playlistControlPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
         JButton clearPlaylistBtn = new JButton("🗑️ 清空列表");
         clearPlaylistBtn.addActionListener(e -> {
-            playlist.clear();
-            updatePlaylistTable();
+            session.clearPlaylist();
         });
         playlistControlPanel.add(clearPlaylistBtn);
 
@@ -263,10 +321,7 @@ public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerList
         JButton playAllFavBtn = new JButton("▶️ 播放全部收藏");
         playAllFavBtn.addActionListener(e -> {
             if (!favorites.isEmpty()) {
-                playlist.clear();
-                playlist.addAll(favorites);
-                updatePlaylistTable();
-                playFromPlaylist(0);
+                session.playFavorites();
             }
         });
         favControlPanel.add(playAllFavBtn);
@@ -361,14 +416,14 @@ public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerList
             if (row != -1) {
                 MusicSong song = getSongFromTable(table, row);
                 if (song != null && !playlist.contains(song)) {
-                    playlist.add(song);
-                    updatePlaylistTable();
+                    session.addToPlaylist(song);
                 }
             }
         });
         menu.add(addPlaylistItem);
 
         JMenuItem favItem = new JMenuItem("❤️ 收藏 / 取消收藏");
+        favoriteMenuItems.add(favItem);
         favItem.addActionListener(e -> {
             int row = table.getSelectedRow();
             if (row != -1) {
@@ -433,7 +488,7 @@ public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerList
         favoriteButton.setToolTipText("收藏当前播放曲目");
         favoriteButton.setFocusPainted(false);
         favoriteButton.addActionListener(e -> {
-            MusicSong current = audioPlayer.getCurrentSong();
+            MusicSong current = displayedSong;
             if (current != null) toggleFavorite(current);
         });
         leftPanel.add(favoriteButton);
@@ -449,8 +504,7 @@ public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerList
         modeButton.setToolTipText("切换播放模式 (顺序/列表循环/单曲循环/随机)");
         modeButton.setFocusPainted(false);
         modeButton.addActionListener(e -> {
-            currentMode = currentMode.next();
-            modeButton.setText(currentMode.getDisplayTitle());
+            session.nextMode();
         });
         buttonsPanel.add(modeButton);
 
@@ -462,7 +516,7 @@ public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerList
         playPauseButton = new JButton("▶️");
         playPauseButton.setFont(playPauseButton.getFont().deriveFont(Font.BOLD, 13f));
         playPauseButton.setToolTipText("播放 / 暂停");
-        playPauseButton.addActionListener(e -> audioPlayer.togglePause());
+        playPauseButton.addActionListener(e -> session.togglePause());
         buttonsPanel.add(playPauseButton);
 
         nextButton = new JButton("⏭️");
@@ -491,30 +545,31 @@ public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerList
     }
 
     private void performSearch() {
+        if (session == null) return;
         String kw = searchTextField.getText().trim();
-        if (kw.isBlank()) {
-            return;
-        }
+        if (kw.isBlank()) return;
         SourceItem item = (SourceItem) sourceComboBox.getSelectedItem();
         String source = item != null ? item.code : "netease";
-
+        long token = ++searchGeneration;
+        if (searchRequest != null) searchRequest.cancel(true);
         searchButton.setEnabled(false);
         searchStatusLabel.setText("🔍 正在搜索【" + kw + "】...");
         searchResults.clear();
         searchTableModel.setRowCount(0);
-
-        ASYNC_WORKER.post(() -> {
+        searchRequest = searchWorker.submit(() -> {
             try {
                 List<MusicSong> list = apiClient.search(kw, source, 30);
                 SwingUtilities.invokeLater(() -> {
+                    if (session == null || token != searchGeneration) return;
+                    searchResults.clear();
                     searchResults.addAll(list);
                     updateSearchTable();
                     searchStatusLabel.setText("✅ 找到 " + list.size() + " 首相关歌曲");
                     searchButton.setEnabled(true);
                 });
             } catch (Exception ex) {
-                LOGGER.log(Level.WARNING, "Music search failed", ex);
                 SwingUtilities.invokeLater(() -> {
+                    if (session == null || token != searchGeneration) return;
                     searchStatusLabel.setText("❌ 搜索失败: " + ex.getMessage());
                     searchButton.setEnabled(true);
                 });
@@ -554,148 +609,15 @@ public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerList
 
     private void playSelectedSearchResult() {
         int row = searchTable.getSelectedRow();
-        if (row < 0 || row >= searchResults.size()) return;
-        MusicSong song = searchResults.get(row);
-
-        if (!playlist.contains(song)) {
-            playlist.add(song);
-            updatePlaylistTable();
-        }
-        currentPlayingIndex = playlist.indexOf(song);
-        playSong(song);
+        if (row >= 0 && row < searchResults.size()) session.select(searchResults.get(row));
     }
 
     private void playFromPlaylist(int index) {
-        if (index < 0 || index >= playlist.size()) return;
-        currentPlayingIndex = index;
-        playSong(playlist.get(index));
+        if (index >= 0 && index < playlist.size()) session.select(playlist.get(index));
     }
 
     private void playFromFavorites(int index) {
-        if (index < 0 || index >= favorites.size()) return;
-        MusicSong song = favorites.get(index);
-        if (!playlist.contains(song)) {
-            playlist.add(song);
-            updatePlaylistTable();
-        }
-        currentPlayingIndex = playlist.indexOf(song);
-        playSong(song);
-    }
-
-    private void playSong(MusicSong song) {
-        if (song == null) return;
-
-        songTitleLabel.setText(song.getName());
-        songArtistLabel.setText(song.getArtist() + " · " + song.getSourceDisplayName());
-        favoriteButton.setText(favorites.contains(song) ? "❤️" : "♡");
-        isFavoriteCurrent = favorites.contains(song);
-
-        // Reset cover & lyric state
-        coverLabel.setIcon(null);
-        coverLabel.setText("🎵");
-        lastActiveLyricIndex = -1;
-
-        searchStatusLabel.setText("▶️ 正在播放: " + song.getName());
-
-        // 1. Instantly resolve audio URL and start playback
-        ASYNC_WORKER.post(() -> {
-            try {
-                String audioUrl = song.getUrl();
-                if (audioUrl == null || audioUrl.isBlank()) {
-                    audioUrl = apiClient.fetchSongUrl(song.getId(), song.getSource());
-                    song.setUrl(audioUrl);
-                }
-                final String finalAudioUrl = audioUrl;
-                SwingUtilities.invokeLater(() -> audioPlayer.play(song, finalAudioUrl));
-            } catch (Exception ex) {
-                LOGGER.log(Level.WARNING, "Failed to resolve song play URL", ex);
-                SwingUtilities.invokeLater(() -> searchStatusLabel.setText("❌ 无法解析曲目播放链接: " + ex.getMessage()));
-            }
-        });
-
-        // 2. Fetch album cover asynchronously
-        if (song.getPicUrl() != null && !song.getPicUrl().isBlank()) {
-            loadCoverImage(song.getPicUrl());
-        } else {
-            ASYNC_WORKER.post(() -> {
-                try {
-                    String picUrl = apiClient.fetchPicUrl(song.getId(), song.getSource());
-                    if (!picUrl.isBlank()) {
-                        song.setPicUrl(picUrl);
-                        SwingUtilities.invokeLater(() -> loadCoverImage(picUrl));
-                    }
-                } catch (Exception ex) {
-                    LOGGER.log(Level.FINE, "Failed to fetch album cover URL", ex);
-                }
-            });
-        }
-
-        // 3. Fetch lyric asynchronously (or use cache)
-        String songKey = song.getSource() + ":" + song.getId();
-        if (lyricCache.containsKey(songKey)) {
-            currentLyrics = lyricCache.get(songKey);
-            updateLyricList(currentLyrics);
-        } else {
-            ASYNC_WORKER.post(() -> {
-                try {
-                    String lrc = song.getLyric();
-                    if (lrc == null || lrc.isBlank() || isNumeric(lrc)) {
-                        lrc = apiClient.fetchLyric(song.getId(), song.getSource());
-                        song.setLyric(lrc);
-                    }
-                    List<LrcParser.LrcLine> lrcLines = LrcParser.parse(lrc);
-                    lyricCache.put(songKey, lrcLines);
-                    SwingUtilities.invokeLater(() -> {
-                        if (song.equals(audioPlayer.getCurrentSong())) {
-                            currentLyrics = lrcLines;
-                            updateLyricList(lrcLines);
-                        }
-                    });
-                } catch (Exception ex) {
-                    LOGGER.log(Level.FINE, "Failed to fetch lyric", ex);
-                }
-            });
-        }
-    }
-
-    private void loadCoverImage(String picUrl) {
-        if (picUrl == null || picUrl.isBlank()) {
-            coverLabel.setIcon(null);
-            coverLabel.setText("🎵");
-            return;
-        }
-
-        if (coverCache.containsKey(picUrl)) {
-            coverLabel.setText("");
-            coverLabel.setIcon(coverCache.get(picUrl));
-            return;
-        }
-
-        ASYNC_WORKER.post(() -> {
-            try {
-                URL url = URI.create(picUrl).toURL();
-                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
-                conn.setRequestProperty("Referer", "https://music.163.com/");
-                conn.setConnectTimeout(4000);
-                conn.setReadTimeout(5000);
-
-                try (InputStream in = conn.getInputStream()) {
-                    Image img = ImageIO.read(in);
-                    if (img != null) {
-                        Image scaled = img.getScaledInstance(42, 42, Image.SCALE_SMOOTH);
-                        ImageIcon icon = new ImageIcon(scaled);
-                        coverCache.put(picUrl, icon);
-                        SwingUtilities.invokeLater(() -> {
-                            coverLabel.setText("");
-                            coverLabel.setIcon(icon);
-                        });
-                    }
-                }
-            } catch (Exception ex) {
-                LOGGER.log(Level.FINE, "Failed to load album cover image", ex);
-            }
-        });
+        if (index >= 0 && index < favorites.size()) session.select(favorites.get(index));
     }
 
     private void updateLyricList(List<LrcParser.LrcLine> lines) {
@@ -711,84 +633,18 @@ public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerList
         lyricList.repaint();
     }
 
-    private void playNext(boolean autoFinish) {
-        if (playlist.isEmpty()) return;
+    private void playNext(boolean automatic) { session.next(automatic); }
 
-        if (autoFinish && currentMode == PlaybackMode.SINGLE_LOOP && currentPlayingIndex != -1) {
-            playSong(playlist.get(currentPlayingIndex));
-            return;
-        }
-
-        if (currentMode == PlaybackMode.RANDOM) {
-            currentPlayingIndex = random.nextInt(playlist.size());
-        } else {
-            currentPlayingIndex++;
-            if (currentPlayingIndex >= playlist.size()) {
-                if (currentMode == PlaybackMode.LIST_LOOP) {
-                    currentPlayingIndex = 0;
-                } else {
-                    currentPlayingIndex = playlist.size() - 1;
-                    if (autoFinish) return; // Sequence end
-                }
-            }
-        }
-
-        playSong(playlist.get(currentPlayingIndex));
-    }
-
-    private void playPrev() {
-        if (playlist.isEmpty()) return;
-
-        if (currentMode == PlaybackMode.RANDOM) {
-            currentPlayingIndex = random.nextInt(playlist.size());
-        } else {
-            currentPlayingIndex--;
-            if (currentPlayingIndex < 0) {
-                currentPlayingIndex = playlist.size() - 1;
-            }
-        }
-
-        playSong(playlist.get(currentPlayingIndex));
-    }
+    private void playPrev() { session.previous(); }
 
     private void toggleFavorite(MusicSong song) {
-        if (song == null) return;
-        if (favorites.contains(song)) {
-            favorites.remove(song);
-            if (song.equals(audioPlayer.getCurrentSong())) {
-                favoriteButton.setText("♡");
-            }
-        } else {
-            favorites.add(song);
-            if (song.equals(audioPlayer.getCurrentSong())) {
-                favoriteButton.setText("❤️");
-            }
-        }
-        saveFavoritesToPreferences();
-        updateFavoritesTable();
-    }
-
-    private void loadFavoritesFromPreferences() {
-        String data = SettingsRepository.getDefault().loadFavorites();
-        favorites.clear();
-        favorites.addAll(MusicSong.deserializeList(data));
-    }
-
-    private void saveFavoritesToPreferences() {
-        String data = MusicSong.serializeList(favorites);
-        SettingsRepository.getDefault().saveFavorites(data);
-    }
-
-    // AudioPlayer Listener Callbacks
-    @Override
-    public void onStatusChanged(boolean playing, MusicSong song) {
-        playPauseButton.setText(playing ? "⏸️" : "▶️");
-        if (song != null) {
-            favoriteButton.setText(favorites.contains(song) ? "❤️" : "♡");
+        try {
+            session.toggleFavorite(song);
+        } catch (RuntimeException ex) {
+            searchStatusLabel.setText("收藏保存失败: " + ex.getMessage());
         }
     }
 
-    @Override
     public void onProgress(long currentMs) {
         long sec = Math.max(0, currentMs / 1000);
         timeLabel.setText(String.format("%02d:%02d", sec / 60, sec % 60));
@@ -823,21 +679,4 @@ public class MusicTabPanel extends JPanel implements MusicAudioPlayer.PlayerList
         viewport.setViewPosition(new java.awt.Point(0, targetY));
     }
 
-    @Override
-    public void onSongFinished(MusicSong song) {
-        playNext(true);
-    }
-
-    @Override
-    public void onError(String message) {
-        searchStatusLabel.setText("❌ " + message);
-    }
-
-    private boolean isNumeric(String str) {
-        if (str == null || str.isBlank()) return false;
-        for (char c : str.toCharArray()) {
-            if (!Character.isDigit(c)) return false;
-        }
-        return true;
-    }
 }

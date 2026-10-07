@@ -73,13 +73,29 @@ public class DailyWeatherChartPanel extends JPanel {
     public DailyWeatherChartPanel() {
         setOpaque(false);
         setupMouseListeners();
+        updateAccessibleData();
     }
 
     public void setDailyForecasts(List<DailyItem> items) {
         this.items = (items != null) ? List.copyOf(items) : List.of();
         this.hoverIndex = -1;
+        cachedXs = null;
+        updateAccessibleData();
         revalidate();
         repaint();
+    }
+
+    private void updateAccessibleData() {
+        StringBuilder description = new StringBuilder();
+        for (DailyItem item : items) {
+            description.append(UiDefaults.text("Weather.daily.row", item.date, item.week,
+                    item.maxTemp, item.minTemp, item.dayCondition, item.nightCondition,
+                    item.precipitationMm, item.humidityPercent, item.windInfo,
+                    item.uvIndex < 0 ? UiDefaults.text("Status.unavailable") : item.uvIndex,
+                    item.sunrise, item.sunset)).append("\n");
+        }
+        UiDefaults.textAlternative(this, UiDefaults.text("Weather.daily.name"),
+                description.isEmpty() ? UiDefaults.text("Weather.daily.empty") : description.toString());
     }
 
     @Override
@@ -133,7 +149,7 @@ public class DailyWeatherChartPanel extends JPanel {
         super.paintComponent(g);
         if (items.isEmpty()) {
             g.setColor(getForeground());
-            g.drawString("暂无多日天气预报数据", 30, getHeight() / 2);
+            g.drawString(UiDefaults.text("Weather.daily.empty"), 30, getHeight() / 2);
             return;
         }
 
@@ -149,8 +165,8 @@ public class DailyWeatherChartPanel extends JPanel {
         int n = items.size();
 
         boolean isDark = isDarkTheme();
-        Color textColor = isDark ? new Color(225, 232, 245) : new Color(35, 45, 65);
-        Color subTextColor = isDark ? new Color(150, 165, 185) : new Color(110, 125, 145);
+        Color textColor = UiDefaults.foreground();
+        Color subTextColor = UiDefaults.foreground();
         Color haloColor = isDark ? new Color(25, 30, 42, 220) : new Color(255, 255, 255, 230);
         Color gridLineColor = isDark ? new Color(255, 255, 255, 20) : new Color(180, 200, 230, 90);
 
@@ -258,12 +274,12 @@ public class DailyWeatherChartPanel extends JPanel {
         g2.draw(buildSmoothPath(xs, lowYs, n));
 
         // --- 5. Draw per-day details ---
-        Font weekFont   = new Font("SansSerif", Font.BOLD, 12);
-        Font dateFont   = new Font("SansSerif", Font.PLAIN, 10);
+        Font weekFont   = UiDefaults.font(Font.BOLD, 12);
+        Font dateFont   = UiDefaults.font(Font.PLAIN, 10);
         Font emojiFont  = new Font("Segoe UI Emoji", Font.PLAIN, 13);
-        Font textFont   = new Font("SansSerif", Font.PLAIN, 11);
-        Font tempFont   = new Font("SansSerif", Font.BOLD, 12);
-        Font badgeFont  = new Font("SansSerif", Font.PLAIN, 10);
+        Font textFont   = UiDefaults.font(Font.PLAIN, 11);
+        Font tempFont   = UiDefaults.font(Font.BOLD, 12);
+        Font badgeFont  = UiDefaults.font(Font.PLAIN, 10);
 
         for (int i = 0; i < n; i++) {
             int ix = Math.round(xs[i]);
@@ -374,10 +390,10 @@ public class DailyWeatherChartPanel extends JPanel {
         if (cardX + cardW > totalW - 12) cardX = totalW - cardW - 12;
         int cardY = totalH - cardH - 14;
 
-        Color cardBg = isDark ? new Color(22, 28, 40, 240) : new Color(255, 255, 255, 245);
-        Color cardBorder = isDark ? new Color(65, 80, 105, 170) : new Color(190, 205, 225, 210);
-        Color cardTitle = isDark ? new Color(240, 245, 255) : new Color(20, 30, 50);
-        Color cardBody = isDark ? new Color(175, 190, 210) : new Color(75, 90, 110);
+        Color cardBg = UiDefaults.background();
+        Color cardBorder = UiDefaults.border();
+        Color cardTitle = UiDefaults.foreground();
+        Color cardBody = UiDefaults.foreground();
 
         g2.setColor(cardBg);
         g2.fill(new RoundRectangle2D.Float(cardX, cardY, cardW, cardH, 10, 10));
@@ -389,14 +405,14 @@ public class DailyWeatherChartPanel extends JPanel {
         int textY = cardY + 20;
 
         // Line 1: Date + Week + Weather
-        g2.setFont(new Font("SansSerif", Font.BOLD, 12));
+        g2.setFont(UiDefaults.font(Font.BOLD, 12));
         g2.setColor(cardTitle);
         String dayEmoji = WeatherChartPanel.getWeatherEmoji(item.dayCondition);
         g2.drawString(item.date + " (" + item.week + ") · " + dayEmoji + " " + item.dayCondition, textX, textY);
 
         // Line 2: High / Low Temperature
         textY += 19;
-        g2.setFont(new Font("SansSerif", Font.BOLD, 12));
+        g2.setFont(UiDefaults.font(Font.BOLD, 12));
         g2.setColor(HIGH_COLOR);
         g2.drawString("最高 " + item.maxTemp + "°C", textX, textY);
         g2.setColor(cardBody);
@@ -404,7 +420,7 @@ public class DailyWeatherChartPanel extends JPanel {
         g2.setColor(LOW_COLOR);
         g2.drawString("最低 " + item.minTemp + "°C", textX + 78, textY);
         g2.setColor(cardBody);
-        g2.setFont(new Font("SansSerif", Font.PLAIN, 10));
+        g2.setFont(UiDefaults.font(Font.PLAIN, 10));
         g2.drawString(" (温差 " + (item.maxTemp - item.minTemp) + "°C)", textX + 138, textY);
 
         // Line 3: Rain & Humidity

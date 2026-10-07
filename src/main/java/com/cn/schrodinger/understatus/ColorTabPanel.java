@@ -2,14 +2,11 @@ package com.cn.schrodinger.understatus;
 
 import java.awt.BorderLayout;
 import java.awt.Color;
-import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
-import java.awt.event.MouseAdapter;
-import java.awt.event.MouseEvent;
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.JColorChooser;
@@ -22,7 +19,7 @@ import javax.swing.event.DocumentListener;
 
 /**
  * Modern bidirectional Color Picker & Converter tab panel.
- * Supports real-time editing of Hex, RGB, and HSL values,
+ * Supports real-time editing of Hex/RGB and a read-only HSL conversion,
  * JColorChooser integration, and a developer quick-palette swatch bar.
  *
  * @author peter/antigravity
@@ -71,18 +68,19 @@ public class ColorTabPanel extends JPanel {
 
         for (String[] swatch : PALETTE_SWATCHES) {
             Color c = parseHex(swatch[0]);
-            JPanel tile = new JPanel();
-            tile.setPreferredSize(new Dimension(24, 24));
+            JButton tile = new JButton();
+            tile.setPreferredSize(new Dimension(28, 28));
+            tile.setMargin(new Insets(0, 0, 0, 0));
             tile.setBackground(c);
-            tile.setToolTipText(swatch[0] + " - " + swatch[1]);
-            tile.setBorder(BorderFactory.createLineBorder(Color.GRAY, 1));
-            tile.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-            tile.addMouseListener(new MouseAdapter() {
-                @Override
-                public void mouseClicked(MouseEvent e) {
-                    applyColor(c, true, true, true);
-                    CommonUtils.copyToClipboard(swatch[0]);
-                }
+            tile.setOpaque(true);
+            tile.setBorder(BorderFactory.createLineBorder(UiDefaults.border(), 1));
+            String name = swatch[0] + " - " + swatch[1];
+            String hint = UiDefaults.text("Color.swatchHint", swatch[0]);
+            UiDefaults.describe(tile, name, hint);
+            UiDefaults.textAlternative(tile, name, hint);
+            tile.addActionListener(e -> {
+                applyColor(c, true, true, true);
+                CommonUtils.copyToClipboard(swatch[0]);
             });
             swatchesBar.add(tile);
         }
@@ -90,7 +88,7 @@ public class ColorTabPanel extends JPanel {
         centerPanel.add(swatchesBar, gbc);
 
         // Row 1: Pick Button & Preview block
-        JButton pickBtn = new JButton("🎨 打开调色盘 (Choose Color)");
+        JButton pickBtn = new JButton(UiDefaults.text("Color.choose"));
         pickBtn.setFont(pickBtn.getFont().deriveFont(12f));
         pickBtn.addActionListener(e -> triggerColorPicker());
         gbc.gridy = 1; gbc.gridx = 0; gbc.gridwidth = 1;
@@ -99,7 +97,7 @@ public class ColorTabPanel extends JPanel {
         colorPreviewPanel = new JPanel();
         colorPreviewPanel.setBackground(new Color(59, 130, 246));
         colorPreviewPanel.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(new Color(120, 140, 160), 1),
+                BorderFactory.createLineBorder(UiDefaults.border(), 1),
                 BorderFactory.createEmptyBorder(6, 12, 6, 12)
         ));
         colorPreviewPanel.setPreferredSize(new Dimension(100, 32));
@@ -111,6 +109,7 @@ public class ColorTabPanel extends JPanel {
         centerPanel.add(new JLabel("十六进制 (Hex):"), gbc);
 
         hexField = new JTextField("#3B82F6", 10);
+        hexField.getAccessibleContext().setAccessibleName("Hex");
         hexField.getDocument().addDocumentListener(new DocumentListener() {
             @Override public void insertUpdate(DocumentEvent e) { onHexChanged(); }
             @Override public void removeUpdate(DocumentEvent e) { onHexChanged(); }
@@ -119,7 +118,8 @@ public class ColorTabPanel extends JPanel {
         gbc.gridx = 1; gbc.weightx = 1.0;
         centerPanel.add(hexField, gbc);
 
-        JButton copyHexBtn = new JButton("复制");
+        JButton copyHexBtn = new JButton(UiDefaults.text("Action.copy"));
+        UiDefaults.describe(copyHexBtn, UiDefaults.text("Color.copyValue", "Hex"), UiDefaults.text("Color.copyValue", "Hex"));
         copyHexBtn.addActionListener(e -> CommonUtils.copyToClipboard(hexField.getText()));
         gbc.gridx = 2; gbc.weightx = 0.0;
         centerPanel.add(copyHexBtn, gbc);
@@ -129,6 +129,7 @@ public class ColorTabPanel extends JPanel {
         centerPanel.add(new JLabel("三原色 (RGB):"), gbc);
 
         rgbField = new JTextField("59, 130, 246", 10);
+        rgbField.getAccessibleContext().setAccessibleName("RGB");
         rgbField.getDocument().addDocumentListener(new DocumentListener() {
             @Override public void insertUpdate(DocumentEvent e) { onRgbChanged(); }
             @Override public void removeUpdate(DocumentEvent e) { onRgbChanged(); }
@@ -137,7 +138,8 @@ public class ColorTabPanel extends JPanel {
         gbc.gridx = 1; gbc.weightx = 1.0;
         centerPanel.add(rgbField, gbc);
 
-        JButton copyRgbBtn = new JButton("复制");
+        JButton copyRgbBtn = new JButton(UiDefaults.text("Action.copy"));
+        UiDefaults.describe(copyRgbBtn, UiDefaults.text("Color.copyValue", "RGB"), UiDefaults.text("Color.copyValue", "RGB"));
         copyRgbBtn.addActionListener(e -> CommonUtils.copyToClipboard(rgbField.getText()));
         gbc.gridx = 2; gbc.weightx = 0.0;
         centerPanel.add(copyRgbBtn, gbc);
@@ -147,19 +149,22 @@ public class ColorTabPanel extends JPanel {
         centerPanel.add(new JLabel("色相/饱和度 (HSL):"), gbc);
 
         hslField = new JTextField("hsl(217, 91%, 60%)", 10);
+        hslField.getAccessibleContext().setAccessibleName("HSL");
         hslField.setEditable(false);
+        hslField.getAccessibleContext().setAccessibleDescription(UiDefaults.text("Color.hslReadOnly"));
         gbc.gridx = 1; gbc.weightx = 1.0;
         centerPanel.add(hslField, gbc);
 
-        JButton copyHslBtn = new JButton("复制");
+        JButton copyHslBtn = new JButton(UiDefaults.text("Action.copy"));
+        UiDefaults.describe(copyHslBtn, UiDefaults.text("Color.copyValue", "HSL"), UiDefaults.text("Color.copyValue", "HSL"));
         copyHslBtn.addActionListener(e -> CommonUtils.copyToClipboard(hslField.getText()));
         gbc.gridx = 2; gbc.weightx = 0.0;
         centerPanel.add(copyHslBtn, gbc);
 
         // Row 5: Status hint
-        statusLabel = new JLabel("支持输入或粘贴 Hex 与 RGB 颜色代码，双向自动同步。");
+        statusLabel = new JLabel(UiDefaults.text("Color.inputHint"));
         statusLabel.setFont(statusLabel.getFont().deriveFont(11f));
-        statusLabel.setForeground(new Color(110, 130, 150));
+        statusLabel.setForeground(UiDefaults.foreground());
         gbc.gridy = 5; gbc.gridx = 0; gbc.gridwidth = 3;
         centerPanel.add(statusLabel, gbc);
 
@@ -172,8 +177,8 @@ public class ColorTabPanel extends JPanel {
         Color c = parseHex(text);
         if (c != null) {
             applyColor(c, false, true, true);
-            statusLabel.setText("Hex 解析有效");
-            statusLabel.setForeground(new Color(40, 160, 80));
+            statusLabel.setText(UiDefaults.text("Color.valid", "Hex"));
+            statusLabel.setForeground(UiDefaults.foreground());
         }
     }
 
@@ -183,8 +188,8 @@ public class ColorTabPanel extends JPanel {
         Color c = parseRgb(text);
         if (c != null) {
             applyColor(c, true, false, true);
-            statusLabel.setText("RGB 解析有效");
-            statusLabel.setForeground(new Color(40, 160, 80));
+            statusLabel.setText(UiDefaults.text("Color.valid", "RGB"));
+            statusLabel.setForeground(UiDefaults.foreground());
         }
     }
 
@@ -193,6 +198,8 @@ public class ColorTabPanel extends JPanel {
         isUpdating = true;
         try {
             colorPreviewPanel.setBackground(c);
+            colorPreviewPanel.getAccessibleContext().setAccessibleName(UiDefaults.text("Color.preview"));
+            colorPreviewPanel.getAccessibleContext().setAccessibleDescription(String.format("#%02X%02X%02X", c.getRed(), c.getGreen(), c.getBlue()));
             if (updateHex) {
                 hexField.setText(String.format("#%02X%02X%02X", c.getRed(), c.getGreen(), c.getBlue()));
             }
@@ -275,7 +282,7 @@ public class ColorTabPanel extends JPanel {
         }
 
         try {
-            Color selectedColor = JColorChooser.showDialog(this, "选择颜色 (Choose Color)", initialColor);
+            Color selectedColor = JColorChooser.showDialog(this, UiDefaults.text("Color.choose"), initialColor);
             if (selectedColor != null) {
                 applyColor(selectedColor, true, true, true);
             }

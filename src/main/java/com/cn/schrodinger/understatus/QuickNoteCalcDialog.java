@@ -26,6 +26,7 @@ import javax.swing.JDialog;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JTabbedPane;
+import javax.swing.JToggleButton;
 import javax.swing.SwingUtilities;
 import javax.swing.UIManager;
 
@@ -61,6 +62,8 @@ public class QuickNoteCalcDialog extends JDialog {
 
     public QuickNoteCalcDialog(java.awt.Window owner) {
         super(owner, ModalityType.MODELESS);
+        setTitle(UiDefaults.text("Toolbox.title"));
+        getAccessibleContext().setAccessibleDescription(UiDefaults.text("Toolbox.navigationHint"));
         setUndecorated(true);
         initComponents();
         setupPopoverFocusBehavior();
@@ -69,7 +72,7 @@ public class QuickNoteCalcDialog extends JDialog {
     }
 
     private void initComponents() {
-        getRootPane().setBorder(BorderFactory.createLineBorder(new Color(110, 125, 145), 1));
+        getRootPane().setBorder(BorderFactory.createLineBorder(UiDefaults.border(), 1));
         setLayout(new BorderLayout());
 
         // Load size from preferences
@@ -78,26 +81,28 @@ public class QuickNoteCalcDialog extends JDialog {
         int height = settings.toolboxHeight();
 
         tabbedPane = new JTabbedPane();
+        tabbedPane.getAccessibleContext().setAccessibleName(UiDefaults.text("Toolbox.tabs"));
+        tabbedPane.getAccessibleContext().setAccessibleDescription(UiDefaults.text("Toolbox.navigationHint"));
         tabbedPane.setPreferredSize(new Dimension(width, height));
         tabbedPane.setTabLayoutPolicy(JTabbedPane.SCROLL_TAB_LAYOUT);
 
         // Register 16 modular panels with lazy supplier definitions
-        registerLazyTab("便签 (Notes)", NotesTabPanel::new);
-        registerLazyTab("计算器 (Calc)", CalcTabPanel::new);
-        registerLazyTab("编解码/时间戳 (Utils)", UtilsTabPanel::new);
-        registerLazyTab("编码转换 (Codec)", EncodingTabPanel::new);
-        registerLazyTab("JWT解码 (JWT)", JwtTabPanel::new);
-        registerLazyTab("JSON格式化 (JSON)", JsonTabPanel::new);
-        registerLazyTab("XML格式化 (XML)", XmlTabPanel::new);
-        registerLazyTab("SQL格式化 (SQL)", SqlTabPanel::new);
-        registerLazyTab("文本处理 (Text)", TextTabPanel::new);
-        registerLazyTab("正则测试 (Regex)", RegexTabPanel::new);
-        registerLazyTab("取色器 (Color)", ColorTabPanel::new);
-        registerLazyTab("哈希生成 (Hash)", HashTabPanel::new);
-        registerLazyTab("文本对比 (Diff)", DiffTabPanel::new);
-        registerLazyTab("Cron解析 (Cron)", CronTabPanel::new);
-        registerLazyTab("生成器 (Gen)", GenTabPanel::new);
-        registerLazyTab("音乐播放器 (Music)", MusicTabPanel::new);
+        registerLazyTab(UiDefaults.text("Toolbox.tab.notes"), NotesTabPanel::new);
+        registerLazyTab(UiDefaults.text("Toolbox.tab.calc"), CalcTabPanel::new);
+        registerLazyTab(UiDefaults.text("Toolbox.tab.utils"), UtilsTabPanel::new);
+        registerLazyTab(UiDefaults.text("Toolbox.tab.codec"), EncodingTabPanel::new);
+        registerLazyTab(UiDefaults.text("Toolbox.tab.jwt"), JwtTabPanel::new);
+        registerLazyTab(UiDefaults.text("Toolbox.tab.json"), JsonTabPanel::new);
+        registerLazyTab(UiDefaults.text("Toolbox.tab.xml"), XmlTabPanel::new);
+        registerLazyTab(UiDefaults.text("Toolbox.tab.sql"), SqlTabPanel::new);
+        registerLazyTab(UiDefaults.text("Toolbox.tab.text"), TextTabPanel::new);
+        registerLazyTab(UiDefaults.text("Toolbox.tab.regex"), RegexTabPanel::new);
+        registerLazyTab(UiDefaults.text("Toolbox.tab.color"), ColorTabPanel::new);
+        registerLazyTab(UiDefaults.text("Toolbox.tab.hash"), HashTabPanel::new);
+        registerLazyTab(UiDefaults.text("Toolbox.tab.diff"), DiffTabPanel::new);
+        registerLazyTab(UiDefaults.text("Toolbox.tab.cron"), CronTabPanel::new);
+        registerLazyTab(UiDefaults.text("Toolbox.tab.gen"), GenTabPanel::new);
+        registerLazyTab(UiDefaults.text("Toolbox.tab.music"), MusicTabPanel::new);
 
         // Tab change listener for lazy loading & active tab persistence
         tabbedPane.addChangeListener(e -> {
@@ -123,7 +128,7 @@ public class QuickNoteCalcDialog extends JDialog {
         headerPanel.setBackground(UIManager.getColor("Panel.background"));
         headerPanel.setBorder(BorderFactory.createEmptyBorder(3, 8, 3, 4));
 
-        JLabel titleLabel = new JLabel("🧰 开发者工具箱 (Toolbox)");
+        JLabel titleLabel = new JLabel(UiDefaults.text("Toolbox.title"));
         titleLabel.setFont(titleLabel.getFont().deriveFont(Font.BOLD, 12f));
         titleLabel.setCursor(Cursor.getPredefinedCursor(Cursor.MOVE_CURSOR));
         headerPanel.add(titleLabel, BorderLayout.WEST);
@@ -149,41 +154,32 @@ public class QuickNoteCalcDialog extends JDialog {
         JPanel actionBtns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
         actionBtns.setOpaque(false);
 
-        JButton pinBtn = new JButton("📌");
+        JToggleButton pinBtn = new JToggleButton("📌");
         pinBtn.setFont(pinBtn.getFont().deriveFont(11f));
-        pinBtn.setToolTipText("固定窗口（防止失去焦点自动关闭）");
-        pinBtn.setBorderPainted(false);
-        pinBtn.setContentAreaFilled(false);
-        pinBtn.setFocusPainted(false);
+        UiDefaults.describe(pinBtn, UiDefaults.text("Toolbox.pin"), UiDefaults.text("Toolbox.pinHint"));
         pinBtn.setMargin(new Insets(2, 4, 2, 4));
         pinBtn.addActionListener(e -> {
-            isPinned = !isPinned;
+            isPinned = pinBtn.isSelected();
             if (isPinned) {
                 pinBtn.setText("📍");
-                pinBtn.setToolTipText("窗口已固定（点击取消固定，恢复失焦自动关闭）");
+                UiDefaults.describe(pinBtn, UiDefaults.text("Toolbox.unpin"), UiDefaults.text("Toolbox.unpinHint"));
             } else {
                 pinBtn.setText("📌");
-                pinBtn.setToolTipText("固定窗口（防止失去焦点自动关闭）");
+                UiDefaults.describe(pinBtn, UiDefaults.text("Toolbox.pin"), UiDefaults.text("Toolbox.pinHint"));
             }
         });
         actionBtns.add(pinBtn);
 
         JButton settingsBtn = new JButton("⚙️");
         settingsBtn.setFont(settingsBtn.getFont().deriveFont(11f));
-        settingsBtn.setToolTipText("状态栏与工具箱显示配置");
-        settingsBtn.setBorderPainted(false);
-        settingsBtn.setContentAreaFilled(false);
-        settingsBtn.setFocusPainted(false);
+        UiDefaults.describe(settingsBtn, UiDefaults.text("Action.settings"), UiDefaults.text("Toolbox.settingsHint"));
         settingsBtn.setMargin(new Insets(2, 4, 2, 4));
         settingsBtn.addActionListener(e -> launchSettingsDialog());
         actionBtns.add(settingsBtn);
 
         JButton closeBtn = new JButton("×");
         closeBtn.setFont(closeBtn.getFont().deriveFont(15f));
-        closeBtn.setToolTipText("关闭 (Close · ESC)");
-        closeBtn.setBorderPainted(false);
-        closeBtn.setContentAreaFilled(false);
-        closeBtn.setFocusPainted(false);
+        UiDefaults.describe(closeBtn, UiDefaults.text("Action.close"), UiDefaults.text("Toolbox.closeHint"));
         closeBtn.setMargin(new Insets(0, 4, 0, 4));
         closeBtn.addActionListener(e -> dispose());
         actionBtns.add(closeBtn);

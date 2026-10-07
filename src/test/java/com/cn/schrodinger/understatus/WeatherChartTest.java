@@ -5,12 +5,18 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.cn.schrodinger.understatus.weather.MinutelyPrecipitation;
+import com.cn.schrodinger.understatus.weather.AirQualitySnapshot;
+import com.cn.schrodinger.understatus.weather.WeatherNow;
+import com.cn.schrodinger.understatus.weather.WeatherIndex;
 import java.awt.Dimension;
 import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.time.LocalDate;
+import javax.swing.SwingUtilities;
 import org.junit.jupiter.api.Test;
 
 class WeatherChartTest {
@@ -42,6 +48,9 @@ class WeatherChartTest {
 
         // Test metric switching
         panel.setMetric(WeatherChartPanel.Metric.HUMIDITY);
+        assertTrue(panel.getAccessibleContext().getAccessibleName().contains("湿度"));
+        assertTrue(panel.getAccessibleContext().getAccessibleDescription().contains("10-01 00:00"));
+        assertTrue(panel.getAccessibleContext().getAccessibleDescription().contains("1.5"));
         assertEquals(WeatherChartPanel.Metric.HUMIDITY, panel.getMetric());
         assertEquals("65%", WeatherChartPanel.Metric.HUMIDITY.formatValue(65.0));
         assertEquals("2.5mm", WeatherChartPanel.Metric.PRECIPITATION.formatValue(2.5));
@@ -77,6 +86,8 @@ class WeatherChartTest {
 
         DailyWeatherChartPanel dailyPanel = new DailyWeatherChartPanel();
         dailyPanel.setDailyForecasts(items);
+        assertTrue(dailyPanel.getAccessibleContext().getAccessibleDescription().contains("10-15"));
+        assertTrue(dailyPanel.getAccessibleContext().getAccessibleDescription().contains("17:50"));
 
         Dimension dim = dailyPanel.getPreferredSize();
         assertTrue(dim.width >= 15 * 70);
@@ -103,6 +114,8 @@ class WeatherChartTest {
 
         PrecipitationChartPanel precipPanel = new PrecipitationChartPanel();
         precipPanel.setPoints(points);
+        assertTrue(precipPanel.getAccessibleContext().getAccessibleDescription().contains("1.2"));
+        assertTrue(precipPanel.getAccessibleContext().getAccessibleDescription().contains("rain"));
 
         precipPanel.setSize(760, 240);
         BufferedImage image = new BufferedImage(760, 240, BufferedImage.TYPE_INT_ARGB);
@@ -110,5 +123,45 @@ class WeatherChartTest {
         precipPanel.paint(g2);
         g2.dispose();
         assertNotNull(image);
+    }
+
+    @Test void replacingOrClearingChartDataReplacesAccessibleDescription() throws Exception {
+        SwingUtilities.invokeAndWait(() -> {
+            PrecipitationChartPanel panel = new PrecipitationChartPanel();
+            panel.setPoints(List.of(new MinutelyPrecipitation.Point(OffsetDateTime.parse("2026-10-07T12:00:00+08:00"), 3.2, "rain")));
+            assertTrue(panel.getAccessibleContext().getAccessibleDescription().contains("3.2"));
+            panel.setPoints(List.of());
+            assertEquals(UiDefaults.text("Weather.precipitation.empty"), panel.getAccessibleContext().getAccessibleDescription());
+            WeatherChartPanel hourly = new WeatherChartPanel(null);
+            assertEquals(UiDefaults.text("Weather.empty"), hourly.getAccessibleContext().getAccessibleDescription());
+            assertTrue(hourly.isFocusable());
+        });
+    }
+
+    @Test void weatherCardsExposeUnitsCacheStatusAndClearStaleDescriptions() throws Exception {
+        SwingUtilities.invokeAndWait(() -> {
+            AirQualityPanel air = new AirQualityPanel();
+            air.setAirQuality(new AirQualitySnapshot(OffsetDateTime.parse("2026-10-07T12:00:00+08:00"),
+                    55, "良", "pm2p5", Map.of("pm2p5", 30.0, "co", 0.4), "", null));
+            String airText = air.getAccessibleContext().getAccessibleDescription();
+            assertTrue(airText.contains("AQI 55"));
+            assertTrue(airText.contains("0.4 mg/m³"));
+            air.setAirQuality(null);
+            assertEquals(UiDefaults.text("Weather.air.empty"), air.getAccessibleContext().getAccessibleDescription());
+
+            RealtimeWeatherPanel now = new RealtimeWeatherPanel();
+            now.setCityWeather(new WeatherNow(OffsetDateTime.parse("2026-10-07T12:00:00+08:00"),
+                    20, 19, "100", "晴", 90, "东风", "2", 10, 60, 0, 1010, 12, 10, 5, null), "测试城市", true);
+            assertTrue(now.getAccessibleContext().getAccessibleDescription().contains(UiDefaults.text("Status.stale")));
+            assertTrue(now.getAccessibleContext().getAccessibleDescription().contains("测试城市"));
+            now.setCityWeather(null, "", false);
+            assertEquals(UiDefaults.text("Weather.now.empty"), now.getAccessibleContext().getAccessibleDescription());
+
+            WeatherIndicesPanel indices = new WeatherIndicesPanel();
+            indices.setIndices(List.of(new WeatherIndex(LocalDate.of(2026, 10, 7), 1, "运动", "1", "适宜", "适合户外运动", null)));
+            assertTrue(indices.getAccessibleContext().getAccessibleDescription().contains("适合户外运动"));
+            indices.setIndices(List.of());
+            assertEquals(UiDefaults.text("Weather.indices.empty"), indices.getAccessibleContext().getAccessibleDescription());
+        });
     }
 }

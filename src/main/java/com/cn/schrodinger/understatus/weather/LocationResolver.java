@@ -36,13 +36,16 @@ public final class LocationResolver {
                     zone(text(item, "tz")));
         } catch (WeatherException ex) {
             throw ex;
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new WeatherException(WeatherException.Kind.CANCELLED, "天气定位已取消", ex);
         } catch (Exception ex) {
-            throw new WeatherException(WeatherException.Kind.NETWORK,
+            throw new WeatherException(WeatherException.Kind.RESPONSE,
                     "无法解析天气地点", ex);
         }
     }
 
-    private String resolveByIp(String fallback) {
+    private String resolveByIp(String fallback) throws WeatherException {
         try {
             JsonValue.ObjectValue root = JsonParser.parse(transport.get(IP_LOOKUP)).asObject();
             boolean success = root.optional("success").isEmpty()
@@ -50,6 +53,11 @@ public final class LocationResolver {
             String city = success ? text(root, "city") : "";
             return city.isBlank() ? fallback : city;
         } catch (Exception ex) {
+            if (ex instanceof InterruptedException) Thread.currentThread().interrupt();
+            if (Thread.currentThread().isInterrupted()
+                    || ex instanceof WeatherException weather && weather.kind() == WeatherException.Kind.CANCELLED) {
+                throw new WeatherException(WeatherException.Kind.CANCELLED, "天气定位已取消", ex);
+            }
             return fallback;
         }
     }

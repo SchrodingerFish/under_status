@@ -13,10 +13,12 @@ public final class StatusBarController {
     public void start() {
         if (started) return;
         started = true;
-        view.loadSettings();
+        view.startUpdates();
     }
 
     public void close() {
+        if (!started) return;
+        view.stopUpdates();
         started = false;
     }
 }

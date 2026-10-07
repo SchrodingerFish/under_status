@@ -1,5 +1,6 @@
 package com.cn.schrodinger.understatus;
 
+import com.cn.schrodinger.understatus.toolbox.core.ToolTask;
 import com.cn.schrodinger.understatus.toolbox.core.CronExplainer;
 
 import java.awt.BorderLayout;
@@ -25,12 +26,15 @@ import javax.swing.event.DocumentListener;
  * @author peter/antigravity
  */
 public class CronTabPanel extends JPanel {
+    private final ToolTask tasks = new ToolTask(this);
 
     private JTextField cronField;
     private JTextArea outputArea;
 
     public CronTabPanel() {
         initComponents();
+        tasks.watch(cronField);
+        tasks.onShow(this::runCronExplain);
         runCronExplain();
     }
 
@@ -125,11 +129,12 @@ public class CronTabPanel extends JPanel {
     }
 
     private void runCronExplain() {
-        String cron = cronField.getText().trim();
-        if (cron.isEmpty()) {
-            outputArea.setText("请输入 Cron 表达式");
-            return;
+        try {
+            String input = ToolTask.snapshot(cronField);
+            tasks.submit(() -> CronExplainer.explainCron(input), outputArea::setText, error -> outputArea.setText("处理失败: " + error));
+        } catch (IllegalArgumentException ex) {
+            tasks.cancel();
+            outputArea.setText(ex.getMessage());
         }
-        outputArea.setText(CronExplainer.explainCron(cron));
     }
 }

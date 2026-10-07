@@ -35,13 +35,26 @@ final class PrecipitationChartPanel extends JPanel {
         setPreferredSize(new Dimension(760, 240));
         setOpaque(false);
         setupMouseListeners();
+        updateAccessibleData();
     }
 
     void setPoints(List<MinutelyPrecipitation.Point> points) {
         this.points = (points != null) ? List.copyOf(points) : List.of();
         this.hoverIndex = -1;
+        cachedXs = null;
+        updateAccessibleData();
         revalidate();
         repaint();
+    }
+
+    private void updateAccessibleData() {
+        StringBuilder description = new StringBuilder();
+        for (MinutelyPrecipitation.Point point : points) {
+            description.append(UiDefaults.text("Weather.precipitation.row", point.time(),
+                    point.precipitationMm(), point.type())).append("\n");
+        }
+        UiDefaults.textAlternative(this, UiDefaults.text("Weather.precipitation.name"),
+                description.isEmpty() ? UiDefaults.text("Weather.precipitation.empty") : description.toString());
     }
 
     private void setupMouseListeners() {
@@ -92,13 +105,13 @@ final class PrecipitationChartPanel extends JPanel {
         int h = getHeight();
 
         boolean isDark = isDarkTheme();
-        Color textColor = isDark ? new Color(220, 226, 235) : new Color(40, 50, 70);
-        Color subTextColor = isDark ? new Color(150, 165, 185) : new Color(110, 125, 145);
+        Color textColor = UiDefaults.foreground();
+        Color subTextColor = UiDefaults.foreground();
         Color gridColor = isDark ? new Color(255, 255, 255, 25) : new Color(180, 200, 230, 90);
 
         if (points.isEmpty()) {
             g.setColor(textColor);
-            g.drawString("暂无分钟级降水数据", 30, h / 2);
+            g.drawString(UiDefaults.text("Weather.precipitation.empty"), 30, h / 2);
             g.dispose();
             return;
         }
@@ -119,7 +132,7 @@ final class PrecipitationChartPanel extends JPanel {
         float[] xs = new float[n];
 
         // --- 1. Horizontal Reference Lines for Rain Intensity ---
-        Font scaleFont = new Font("SansSerif", Font.PLAIN, 10);
+        Font scaleFont = UiDefaults.font(Font.PLAIN, 10);
         g.setFont(scaleFont);
         g.setStroke(new BasicStroke(1f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER,
                 1f, new float[]{3f, 4f}, 0f));
@@ -204,10 +217,10 @@ final class PrecipitationChartPanel extends JPanel {
         if (cardX + cardW > totalW - 12) cardX = totalW - cardW - 12;
         int cardY = padTop + 10;
 
-        Color cardBg = isDark ? new Color(24, 30, 42, 235) : new Color(255, 255, 255, 240);
-        Color cardBorder = isDark ? new Color(70, 85, 110, 160) : new Color(190, 205, 225, 200);
-        Color cardTitle = isDark ? new Color(240, 245, 255) : new Color(20, 30, 50);
-        Color cardBody = isDark ? new Color(175, 190, 210) : new Color(75, 90, 110);
+        Color cardBg = UiDefaults.background();
+        Color cardBorder = UiDefaults.border();
+        Color cardTitle = UiDefaults.foreground();
+        Color cardBody = UiDefaults.foreground();
 
         g.setColor(cardBg);
         g.fill(new RoundRectangle2D.Float(cardX, cardY, cardW, cardH, 8, 8));
@@ -219,20 +232,21 @@ final class PrecipitationChartPanel extends JPanel {
         int textY = cardY + 18;
 
         // Line 1: Time
-        g.setFont(new Font("SansSerif", Font.BOLD, 12));
+        g.setFont(UiDefaults.font(Font.BOLD, 12));
         g.setColor(cardTitle);
         g.drawString(point.time().format(TIME_FMT) + " 降水详情", textX, textY);
 
         // Line 2: Precipitation
         textY += 18;
-        g.setFont(new Font("SansSerif", Font.BOLD, 12));
+        g.setFont(UiDefaults.font(Font.BOLD, 12));
         g.setColor(new Color(24, 144, 255));
-        String valStr = String.format(Locale.US, "强度: %.2f mm/h", point.precipitationMm());
+        String valStr = UiDefaults.text("Weather.precipitation.value",
+                String.format(Locale.US, "%.2f", point.precipitationMm()));
         g.drawString(valStr, textX, textY);
 
         // Line 3: Description & Type
         textY += 16;
-        g.setFont(new Font("SansSerif", Font.PLAIN, 10));
+        g.setFont(UiDefaults.font(Font.PLAIN, 10));
         g.setColor(cardBody);
         String intensityDesc = getIntensityDesc(point.precipitationMm(), point.type());
         g.drawString(intensityDesc, textX, textY);

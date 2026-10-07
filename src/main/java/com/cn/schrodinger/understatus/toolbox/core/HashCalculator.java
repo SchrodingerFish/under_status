@@ -17,6 +17,7 @@ public class HashCalculator {
         if (input == null) {
             return "";
         }
+        ToolLimits.input(input);
         try {
             MessageDigest md = MessageDigest.getInstance(algorithm);
             byte[] digest = md.digest(input.getBytes(StandardCharsets.UTF_8));

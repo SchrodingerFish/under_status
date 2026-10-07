@@ -4,6 +4,7 @@ import java.nio.charset.Charset;
 import javax.swing.text.Document;
 import org.openide.filesystems.FileObject;
 import org.openide.loaders.DataObject;
+import org.netbeans.api.queries.FileEncodingQuery;
 
 /**
  * Utility operations related to active editor document text metrics and properties.
@@ -77,20 +78,8 @@ public final class DocumentUtils {
             return defaultEncoding();
         }
         try {
-            Class<?> feqClass = Class.forName("org.netbeans.api.queries.FileEncodingQuery");
-            java.lang.reflect.Method getEncodingMethod =
-                    feqClass.getMethod("getEncoding", FileObject.class);
-            Object charset = getEncodingMethod.invoke(null, fileObject);
-            if (charset instanceof Charset) {
-                return ((Charset) charset).name();
-            }
-            if (charset != null) {
-                java.lang.reflect.Method nameMethod = charset.getClass().getMethod("name");
-                Object name = nameMethod.invoke(charset);
-                if (name != null && !name.toString().isBlank()) {
-                    return name.toString();
-                }
-            }
+            Charset charset = FileEncodingQuery.getEncoding(fileObject);
+            if (charset != null) return charset.name();
         } catch (Exception ex) {
             // FileEncodingQuery may be unavailable outside a full IDE runtime.
         }

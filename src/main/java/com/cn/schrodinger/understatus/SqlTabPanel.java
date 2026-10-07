@@ -1,5 +1,6 @@
 package com.cn.schrodinger.understatus;
 
+import com.cn.schrodinger.understatus.toolbox.core.ToolTask;
 import com.cn.schrodinger.understatus.toolbox.core.SqlFormatter;
 
 import java.awt.BorderLayout;
@@ -18,7 +19,10 @@ import javax.swing.UIManager;
  */
 public class SqlTabPanel extends JPanel {
 
+    private final ToolTask tasks = new ToolTask(this);
     private JTextArea sqlTextArea;
+
+    private final javax.swing.JLabel statusLabel = new javax.swing.JLabel(" ");
 
     public SqlTabPanel() {
         initComponents();
@@ -29,6 +33,7 @@ public class SqlTabPanel extends JPanel {
         setBorder(BorderFactory.createEmptyBorder(6, 6, 6, 6));
 
         sqlTextArea = new JTextArea();
+        tasks.watch(sqlTextArea);
         sqlTextArea.setFont(UIManager.getFont("TextArea.font").deriveFont(11f));
         add(new JScrollPane(sqlTextArea), BorderLayout.CENTER);
 
@@ -48,17 +53,14 @@ public class SqlTabPanel extends JPanel {
         buttonPanel.add(clearBtn);
         buttonPanel.add(copyBtn);
 
-        add(buttonPanel, BorderLayout.SOUTH);
+        JPanel footer = new JPanel(new BorderLayout());
+        footer.add(buttonPanel, BorderLayout.CENTER);
+        footer.add(statusLabel, BorderLayout.SOUTH);
+        add(footer, BorderLayout.SOUTH);
     }
 
     private void triggerSqlFormatting(boolean prettify) {
-        String input = sqlTextArea.getText().trim();
-        if (input.isEmpty()) return;
-        
-        if (prettify) {
-            sqlTextArea.setText(SqlFormatter.format(input));
-        } else {
-            sqlTextArea.setText(SqlFormatter.minify(input));
-        }
+        tasks.transform(sqlTextArea, sqlTextArea, statusLabel,
+                input -> prettify ? SqlFormatter.format(input) : SqlFormatter.minify(input));
     }
 }

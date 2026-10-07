@@ -12,6 +12,23 @@ import org.junit.jupiter.api.Test;
 class JsonParserTest {
 
     @Test
+    void rejectsExcessiveNestingAndOversizedInput() {
+        assertResponseError("[".repeat(200) + "0" + "]".repeat(200));
+        assertResponseError("\"" + "x".repeat(3 * 1024 * 1024) + "\"");
+        assertResponseError("1e999999999");
+        assertResponseError("1".repeat(300));
+    }
+
+    @Test
+    void cacheScopeAndConfigurationDiagnosticsDoNotExposeCredential() {
+        QWeatherConfig config = new QWeatherConfig("abc.qweatherapi.com", "top-secret-key", "zh", "m");
+        assertFalse(config.cacheIdentity().contains("top-secret-key"));
+        assertFalse(config.toString().contains("top-secret-key"));
+        assertEquals(config.cacheIdentity(),
+                new QWeatherConfig("ABC.qweatherapi.com", "top-secret-key", "en", "i").cacheIdentity());
+    }
+
+    @Test
     void parsesNestedObjectsArraysEscapesAndNumbers() throws Exception {
         JsonValue root = JsonParser.parse(
                 "{\"now\":{\"temp\":\"31\",\"text\":\"晴\\n天\"},\"items\":[1,true,null]}");

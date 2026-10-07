@@ -1,222 +1,158 @@
 package com.cn.schrodinger.understatus.toolbox.core;
 
+import java.time.Clock;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.BitSet;
 import java.util.List;
 import java.util.Locale;
 
-/**
- * Lightweight Cron expression fields descriptor.
- * Translates Cron schedule layouts into Chinese human-readable text.
- *
- * @author peter/antigravity
- */
-public class CronExplainer {
+/** Bounded Unix (five fields) and Quartz (six/seven fields) schedule preview. */
+public final class CronExplainer {
+    private static final int FIRST_YEAR = 1970;
+    private static final int LAST_YEAR = 2199;
+    private static final String[] MONTHS = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"};
+    private static final String[] WEEKDAYS = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
 
-    public static String explainCron(String cron) {
-        if (cron == null || cron.trim().isEmpty()) {
-            return "";
-        }
-        cron = cron.trim();
-        String[] parts = cron.split("\\s+");
-        if (parts.length < 5 || parts.length > 7) {
-            return "无效的 Cron 表达式格式 (Must have 5 to 7 fields separated by spaces)";
-        }
+    private CronExplainer() {}
+
+    public static String explainCron(String cron) { return explainCron(cron, Clock.systemDefaultZone()); }
+
+    public static String explainCron(String cron, Clock clock) {
+        if (cron == null || cron.isBlank()) return "";
         try {
-            String sec = "0";
-            String min, hour, dom, month, dow, year = "*";
-            if (parts.length == 5) {
-                min = parts[0];
-                hour = parts[1];
-                dom = parts[2];
-                month = parts[3];
-                dow = parts[4];
-            } else {
-                sec = parts[0];
-                min = parts[1];
-                hour = parts[2];
-                dom = parts[3];
-                month = parts[4];
-                dow = parts[5];
-                if (parts.length == 7) {
-                    year = parts[6];
-                }
+            Schedule schedule = parse(cron);
+            StringBuilder text = new StringBuilder(schedule.quartz
+                    ? "Quartz (6/7 字段): 星期 1=SUN … 7=SAT；日期/星期必须有一个 ?。\n"
+                    : "Unix (5 字段): 星期 0/7=SUN … 6=SAT；日期和星期均受限时取并集。\n");
+            text.append("表达式: ").append(cron.trim()).append("\n时区: ").append(clock.getZone())
+                    .append("\n支持 *, 列表, 范围, 正整数步长；年份范围 1970–2199。\n")
+                    .append("预览使用本地日历时间，夏令时切换处不代表调度器实际触发次数。\n");
+            String[] raw = cron.trim().split("\\s+");
+            String[] labels = schedule.quartz
+                    ? new String[]{"秒", "分钟", "小时", "日期", "月份", "星期", "年份"}
+                    : new String[]{"分钟", "小时", "日期", "月份", "星期"};
+            for (int i = 0; i < raw.length; i++) {
+                text.append(labels[i]).append(": ").append(describe(raw[i])).append('\n');
             }
-
-            StringBuilder desc = new StringBuilder("字段解释 (Fields):\n");
-            desc.append("秒数 (Seconds): ").append(translateField(sec, "每秒")).append("\n");
-            desc.append("分钟 (Minutes): ").append(translateField(min, "每分钟")).append("\n");
-            desc.append("小时 (Hours):   ").append(translateField(hour, "每小时")).append("\n");
-            desc.append("日期 (Days):    ").append(translateField(dom, "每天")).append("\n");
-            desc.append("月份 (Months):  ").append(translateField(month, "每月")).append("\n");
-            desc.append("星期 (Weekdays):").append(translateField(dow, "每周")).append("\n");
-            if (!year.equals("*")) {
-                desc.append("年份 (Years):   ").append(translateField(year, "每年")).append("\n");
-            }
-            
-            desc.append("\n运行计划摘要 (Schedule Summary):\n");
-            desc.append("在 ").append(explainFieldText(month, "月")).append(" 的 ")
-                .append(explainFieldText(dom, "号 (或星期 " + explainFieldText(dow, "") + ")")).append("，")
-                .append(explainFieldText(hour, "点")).append(" ")
-                .append(explainFieldText(min, "分")).append(" ")
-                .append(explainFieldText(sec, "秒")).append(" 执行。\n");
-
-            List<java.time.LocalDateTime> nextRuns = getNextExecutionTimes(cron, 5);
-            if (!nextRuns.isEmpty()) {
-                desc.append("\n未来 5 次执行时间预估 (Next 5 Execution Runs):\n");
-                java.time.format.DateTimeFormatter dtf = 
-                        java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss (EEEE)", java.util.Locale.CHINESE);
-                for (int i = 0; i < nextRuns.size(); i++) {
-                    desc.append(String.format("  [%d] %s\n", i + 1, nextRuns.get(i).format(dtf)));
-                }
-            }
-
-            return desc.toString();
-        } catch (Exception ex) {
+            List<LocalDateTime> runs = getNextExecutionTimes(cron, 5, clock);
+            text.append("\n未来执行时间 (Next runs):\n");
+            for (LocalDateTime run : runs) text.append(run.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss EEEE", Locale.CHINESE))).append('\n');
+            if (runs.isEmpty()) text.append("截至 2199 年没有匹配时间。\n");
+            return text.toString();
+        } catch (IllegalArgumentException ex) {
             return "Cron 解析失败: " + ex.getMessage();
         }
     }
 
-    public static java.util.List<java.time.LocalDateTime> getNextExecutionTimes(String cron, int count) {
-        java.util.List<java.time.LocalDateTime> result = new java.util.ArrayList<>();
-        if (cron == null || cron.trim().isEmpty()) {
-            return result;
+    private static String describe(String value) {
+        if (value.equals("*")) return "任意值";
+        if (value.equals("?")) return "不指定（由另一日期字段决定）";
+        if (value.contains(",")) return "指定列表 " + value;
+        if (value.contains("/")) {
+            String[] step = value.split("/");
+            return "在 " + (step[0].equals("*") ? "完整范围" : step[0]) + " 内，每隔 " + step[1] + " 个单位";
         }
-        String[] parts = cron.trim().split("\\s+");
-        if (parts.length < 5 || parts.length > 7) {
-            return result;
-        }
-        String sec = "0", min, hour, dom, month, dow;
-        if (parts.length == 5) {
-            min = parts[0]; hour = parts[1]; dom = parts[2]; month = parts[3]; dow = parts[4];
-        } else {
-            sec = parts[0]; min = parts[1]; hour = parts[2]; dom = parts[3]; month = parts[4]; dow = parts[5];
-        }
+        if (value.contains("-")) return "指定范围 " + value;
+        return "指定值 " + value;
+    }
 
-        // Pre-compile fields into fast bitmasks once (O(1) checks without string splits in loops)
-        java.util.BitSet allowedSec = parseCronField(sec, 0, 59);
-        java.util.BitSet allowedMin = parseCronField(min, 0, 59);
-        java.util.BitSet allowedHour = parseCronField(hour, 0, 23);
-        java.util.BitSet allowedDom = parseCronField(dom, 1, 31);
-        java.util.BitSet allowedMonth = parseCronField(month, 1, 12);
+    public static List<LocalDateTime> getNextExecutionTimes(String cron, int count) {
+        return getNextExecutionTimes(cron, count, Clock.systemDefaultZone());
+    }
 
-        String p = dow.toUpperCase()
-                .replace("SUN", "1").replace("MON", "2").replace("TUE", "3")
-                .replace("WED", "4").replace("THU", "5").replace("FRI", "6").replace("SAT", "7");
-        java.util.BitSet allowedDow = parseCronField(p, 1, 7);
-
-        boolean domWild = dom.equals("*") || dom.equals("?");
-        boolean dowWild = dow.equals("*") || dow.equals("?");
-
-        java.time.LocalDateTime curr = java.time.LocalDateTime.now().withNano(0).plusSeconds(1);
-
-        int maxIterations = 20000;
-        while (result.size() < count && maxIterations-- > 0) {
-            // Fast skip month
-            if (!allowedMonth.get(curr.getMonthValue())) {
-                curr = curr.plusMonths(1).withDayOfMonth(1).withHour(0).withMinute(0).withSecond(0);
+    public static List<LocalDateTime> getNextExecutionTimes(String cron, int count, Clock clock) {
+        if (count < 0 || count > 1000) throw new IllegalArgumentException("Count must be between 0 and 1000");
+        Schedule s = parse(cron);
+        List<LocalDateTime> result = new ArrayList<>();
+        LocalDateTime current = LocalDateTime.now(clock).withNano(0).plusSeconds(1);
+        if (current.getYear() < FIRST_YEAR) current = LocalDateTime.of(FIRST_YEAR, 1, 1, 0, 0);
+        while (current.getYear() <= LAST_YEAR && result.size() < count) {
+            ToolLimits.checkInterrupted();
+            int year = s.years.nextSetBit(current.getYear());
+            if (year < 0) break;
+            if (year != current.getYear()) { current = LocalDateTime.of(year, 1, 1, 0, 0); continue; }
+            if (!s.months.get(current.getMonthValue())) {
+                current = current.withDayOfMonth(1).plusMonths(1).withHour(0).withMinute(0).withSecond(0);
                 continue;
             }
-
-            // Fast skip day of month
-            if (!domWild && !allowedDom.get(curr.getDayOfMonth())) {
-                curr = curr.plusDays(1).withHour(0).withMinute(0).withSecond(0);
-                continue;
-            }
-
-            // Fast skip day of week
-            if (!dowWild) {
-                int javaDow = curr.getDayOfWeek().getValue(); // 1=Mon..7=Sun
-                int quartzDow = (javaDow == 7) ? 1 : javaDow + 1; // 1=Sun..7=Sat
-                int linuxDow = (javaDow == 7) ? 0 : javaDow; // 0=Sun..6=Sat
-                if (!allowedDow.get(quartzDow) && !allowedDow.get(linuxDow) && !allowedDow.get(javaDow)) {
-                    curr = curr.plusDays(1).withHour(0).withMinute(0).withSecond(0);
-                    continue;
-                }
-            }
-
-            // Fast skip hour
-            if (!allowedHour.get(curr.getHour())) {
-                curr = curr.plusHours(1).withMinute(0).withSecond(0);
-                continue;
-            }
-
-            // Fast skip minute
-            if (!allowedMin.get(curr.getMinute())) {
-                curr = curr.plusMinutes(1).withSecond(0);
-                continue;
-            }
-
-            // Check second
-            int nextSec = allowedSec.nextSetBit(curr.getSecond());
-            if (nextSec < 0 || nextSec > 59) {
-                curr = curr.plusMinutes(1).withSecond(0);
-                continue;
-            }
-
-            curr = curr.withSecond(nextSec);
-            result.add(curr);
-            curr = curr.plusSeconds(1);
+            int weekday = s.quartz ? current.getDayOfWeek().getValue() % 7 + 1 : current.getDayOfWeek().getValue() % 7;
+            boolean day = s.days.get(current.getDayOfMonth());
+            boolean week = s.weekdays.get(weekday);
+            boolean matchesDay = s.quartz ? (s.dayAny ? week : day)
+                    : (s.dayAny || s.weekAny ? day && week : day || week);
+            if (!matchesDay) { current = current.plusDays(1).withHour(0).withMinute(0).withSecond(0); continue; }
+            int hour = s.hours.nextSetBit(current.getHour());
+            if (hour < 0) { current = current.plusDays(1).withHour(0).withMinute(0).withSecond(0); continue; }
+            if (hour != current.getHour()) { current = current.withHour(hour).withMinute(0).withSecond(0); }
+            int minute = s.minutes.nextSetBit(current.getMinute());
+            if (minute < 0) { current = current.plusHours(1).withMinute(0).withSecond(0); continue; }
+            if (minute != current.getMinute()) current = current.withMinute(minute).withSecond(0);
+            int second = s.seconds.nextSetBit(current.getSecond());
+            if (second < 0) { current = current.plusMinutes(1).withSecond(0); continue; }
+            current = current.withSecond(second);
+            result.add(current);
+            current = current.plusSeconds(1);
         }
         return result;
     }
 
-    private static java.util.BitSet parseCronField(String field, int min, int max) {
-        java.util.BitSet bs = new java.util.BitSet(max + 1);
-        if (field.equals("*") || field.equals("?")) {
-            bs.set(min, max + 1);
-            return bs;
-        }
-        for (String part : field.split(",")) {
-            part = part.trim();
-            if (part.equals("*") || part.equals("?")) {
-                bs.set(min, max + 1);
-            } else if (part.contains("/")) {
-                String[] slash = part.split("/");
-                int start = slash[0].equals("*") ? min : Integer.parseInt(slash[0]);
-                int step = Integer.parseInt(slash[1]);
-                for (int v = start; v <= max; v += step) {
-                    bs.set(v);
-                }
-            } else if (part.contains("-")) {
-                String[] dash = part.split("-");
-                int start = Integer.parseInt(dash[0]);
-                int end = Integer.parseInt(dash[1]);
-                for (int v = start; v <= end; v++) {
-                    bs.set(v);
-                }
-            } else {
-                try {
-                    bs.set(Integer.parseInt(part));
-                } catch (NumberFormatException ignored) {}
-            }
-        }
-        return bs;
+    private record Schedule(boolean quartz, BitSet seconds, BitSet minutes, BitSet hours, BitSet days,
+            BitSet months, BitSet weekdays, BitSet years, boolean dayAny, boolean weekAny) {}
+
+    private static Schedule parse(String cron) {
+        if (cron == null || cron.isBlank() || cron.length() > 512) throw new IllegalArgumentException("Expected a Cron expression (maximum 512 characters)");
+        String[] parts = cron.trim().toUpperCase(Locale.ROOT).split("\\s+");
+        if (parts.length < 5 || parts.length > 7) throw new IllegalArgumentException("Expected five Unix or six/seven Quartz fields");
+        boolean quartz = parts.length != 5;
+        int offset = quartz ? 1 : 0;
+        String dom = parts[offset + 2], dow = parts[offset + 4];
+        if (quartz && dom.equals("?") == dow.equals("?")) throw new IllegalArgumentException("Quartz requires exactly one ? in day-of-month/day-of-week");
+        String month = names(parts[offset + 3], MONTHS, 1);
+        dow = names(dow, WEEKDAYS, quartz ? 1 : 0);
+        BitSet weekdays = field(dow, quartz ? 1 : 0, 7, quartz);
+        if (!quartz && weekdays.get(7)) { weekdays.set(0); weekdays.clear(7); }
+        return new Schedule(quartz, field(quartz ? parts[0] : "0", 0, 59, false),
+                field(parts[offset], 0, 59, false), field(parts[offset + 1], 0, 23, false),
+                field(dom, 1, 31, quartz), field(month, 1, 12, false), weekdays,
+                field(parts.length == 7 ? parts[6] : "*", FIRST_YEAR, LAST_YEAR, false),
+                quartz ? dom.equals("?") : dom.startsWith("*"),
+                quartz ? dow.equals("?") : dow.startsWith("*"));
     }
 
-    private static String translateField(String val, String def) {
-        if (val.equals("*")) return def;
-        if (val.equals("?")) return "不指定";
-        if (val.contains("/")) {
-            String[] p = val.split("/");
-            String start = p[0].equals("*") ? "0" : p[0];
-            return "从第 " + start + " 开始，每隔 " + p[1] + " 执行一次";
-        }
-        if (val.contains("-")) {
-            return "在区间 " + val + " 内执行";
-        }
-        return "在指定值 [" + val + "] 执行";
+    private static String names(String text, String[] names, int first) {
+        for (int i = 0; i < names.length; i++) text = text.replaceAll("\\b" + names[i] + "\\b", Integer.toString(i + first));
+        return text;
     }
 
-    private static String explainFieldText(String val, String unit) {
-        if (val.equals("*")) return "每" + unit;
-        if (val.equals("?")) return "任意";
-        if (val.contains("/")) {
-            String[] p = val.split("/");
-            String start = p[0].equals("*") ? "0" : p[0];
-            return "从第 " + start + unit + "开始，每 " + p[1] + " " + unit;
+    private static BitSet field(String text, int minimum, int maximum, boolean allowQuestion) {
+        BitSet values = new BitSet(maximum + 1);
+        if (text.equals("?") && allowQuestion) { values.set(minimum, maximum + 1); return values; }
+        for (String item : text.split(",", -1)) {
+            String[] stepParts = item.split("/", -1);
+            if (stepParts.length > 2) throw new IllegalArgumentException("Malformed step: " + text);
+            int step = stepParts.length == 2 ? number(stepParts[1], 1, maximum - minimum + 1) : 1;
+            String[] range = stepParts[0].split("-", -1);
+            int start, end;
+            if (stepParts[0].equals("*")) { start = minimum; end = maximum; }
+            else if (range.length == 2) {
+                start = number(range[0], minimum, maximum);
+                end = number(range[1], minimum, maximum);
+                if (start > end) throw new IllegalArgumentException("Descending ranges are unsupported: " + text);
+            } else if (range.length == 1) {
+                start = number(range[0], minimum, maximum);
+                end = stepParts.length == 2 ? maximum : start;
+            } else throw new IllegalArgumentException("Malformed range: " + text);
+            for (int value = start; value <= end; value += step) values.set(value);
         }
-        return val + " " + unit;
+        return values;
+    }
+
+    private static int number(String text, int minimum, int maximum) {
+        if (!text.matches("[0-9]{1,4}")) throw new IllegalArgumentException("Unsupported or malformed field: " + text);
+        int value = Integer.parseInt(text);
+        if (value < minimum || value > maximum) throw new IllegalArgumentException("Value out of range " + minimum + "–" + maximum + ": " + text);
+        return value;
     }
 }

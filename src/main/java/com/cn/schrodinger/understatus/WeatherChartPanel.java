@@ -77,14 +77,18 @@ public class WeatherChartPanel extends JPanel {
     private float[] cachedYs;
 
     public WeatherChartPanel(List<QWeatherService.HourlyForecast> forecasts) {
-        this.forecasts = forecasts;
+        this.forecasts = forecasts == null ? List.of() : List.copyOf(forecasts);
         setOpaque(false);
         setupMouseListeners();
+        updateAccessibleData();
     }
 
     public void setForecasts(List<QWeatherService.HourlyForecast> forecasts) {
-        this.forecasts = forecasts;
+        this.forecasts = forecasts == null ? List.of() : List.copyOf(forecasts);
         this.hoverIndex = -1;
+        cachedXs = null;
+        cachedYs = null;
+        updateAccessibleData();
         revalidate();
         repaint();
     }
@@ -92,8 +96,24 @@ public class WeatherChartPanel extends JPanel {
     public void setMetric(Metric metric) {
         if (metric != null && metric != this.currentMetric) {
             this.currentMetric = metric;
+            updateAccessibleData();
             repaint();
         }
+    }
+
+    private void updateAccessibleData() {
+        String name = UiDefaults.text("Weather.hourly.name", currentMetric.label);
+        StringBuilder description = new StringBuilder();
+        for (QWeatherService.HourlyForecast forecast : forecasts) {
+            String time = forecast.fullTime == null || forecast.fullTime.isBlank()
+                    ? forecast.date + " " + forecast.time : forecast.fullTime;
+            description.append(UiDefaults.text("Weather.hourly.row", time, forecast.text,
+                    currentMetric.label, currentMetric.formatValue(currentMetric.extractValue(forecast)),
+                    forecast.temp, forecast.humidity, forecast.precipitation, forecast.windDirection,
+                    forecast.windSpeed, forecast.pressure)).append("\n");
+        }
+        UiDefaults.textAlternative(this, name, description.isEmpty()
+                ? UiDefaults.text("Weather.empty") : description.toString());
     }
 
     public Metric getMetric() {
@@ -151,7 +171,7 @@ public class WeatherChartPanel extends JPanel {
         super.paintComponent(g);
         if (forecasts == null || forecasts.isEmpty()) {
             g.setColor(getForeground());
-            g.drawString("暂无天气数据", 30, getHeight() / 2);
+            g.drawString(UiDefaults.text("Weather.empty"), 30, getHeight() / 2);
             return;
         }
 
@@ -175,8 +195,8 @@ public class WeatherChartPanel extends JPanel {
         // Theme colors
         boolean isDark = isDarkTheme();
         Color primary = currentMetric.primaryColor;
-        Color textColor = isDark ? new Color(225, 232, 242) : new Color(35, 45, 65);
-        Color subTextColor = isDark ? new Color(150, 165, 185) : new Color(105, 120, 140);
+        Color textColor = UiDefaults.foreground();
+        Color subTextColor = UiDefaults.foreground();
         Color gridColor = isDark ? new Color(255, 255, 255, 25) : new Color(180, 200, 230, 95);
         Color dateDividerColor = isDark ? new Color(255, 255, 255, 35) : new Color(160, 185, 220, 110);
         Color haloColor = isDark ? new Color(25, 30, 42, 220) : new Color(255, 255, 255, 230);
@@ -211,7 +231,7 @@ public class WeatherChartPanel extends JPanel {
         this.cachedYs = ys;
 
         // --- 1. Horizontal grid lines & Y-axis scale labels ---
-        Font scaleFont = new Font("SansSerif", Font.PLAIN, 10);
+        Font scaleFont = UiDefaults.font(Font.PLAIN, 10);
         g2.setFont(scaleFont);
         g2.setStroke(new BasicStroke(1f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER,
                 1f, new float[]{4f, 4f}, 0f));
@@ -230,7 +250,7 @@ public class WeatherChartPanel extends JPanel {
         }
 
         // --- 2. Date dividers (for multi-day forecasts like 72h, 168h) ---
-        Font dateFont = new Font("SansSerif", Font.BOLD, 10);
+        Font dateFont = UiDefaults.font(Font.BOLD, 10);
         g2.setFont(dateFont);
         for (int i = 1; i < n; i++) {
             QWeatherService.HourlyForecast curr = forecasts.get(i);
@@ -273,8 +293,8 @@ public class WeatherChartPanel extends JPanel {
         g2.draw(buildSmoothPath(xs, ys, n));
 
         // --- 5. Data Points & Labels ---
-        Font valFont = new Font("SansSerif", Font.BOLD, 11);
-        Font timeFont = new Font("SansSerif", Font.PLAIN, 10);
+        Font valFont = UiDefaults.font(Font.BOLD, 11);
+        Font timeFont = UiDefaults.font(Font.PLAIN, 10);
         Font iconFont = new Font("Segoe UI Emoji", Font.PLAIN, 13);
 
         // Time step thinning for large n
@@ -369,10 +389,10 @@ public class WeatherChartPanel extends JPanel {
         }
 
         // Tooltip Background & Border
-        Color cardBg = isDark ? new Color(24, 30, 42, 235) : new Color(255, 255, 255, 240);
-        Color cardBorder = isDark ? new Color(70, 85, 110, 160) : new Color(190, 205, 225, 200);
-        Color cardTitle = isDark ? new Color(240, 245, 255) : new Color(20, 30, 50);
-        Color cardBody = isDark ? new Color(175, 190, 210) : new Color(75, 90, 110);
+        Color cardBg = UiDefaults.background();
+        Color cardBorder = UiDefaults.border();
+        Color cardTitle = UiDefaults.foreground();
+        Color cardBody = UiDefaults.foreground();
 
         g2.setColor(cardBg);
         g2.fill(new RoundRectangle2D.Float(cardX, cardY, cardW, cardH, 10, 10));
@@ -385,7 +405,7 @@ public class WeatherChartPanel extends JPanel {
         int textY = cardY + 20;
 
         // Line 1: Time + Emoji + Weather
-        g2.setFont(new Font("SansSerif", Font.BOLD, 12));
+        g2.setFont(UiDefaults.font(Font.BOLD, 12));
         g2.setColor(cardTitle);
         String headerTime = f.fullTime != null && !f.fullTime.isEmpty() ? f.fullTime : f.time;
         String titleStr = headerTime + " · " + getWeatherEmoji(f.text) + " " + f.text;
@@ -393,7 +413,7 @@ public class WeatherChartPanel extends JPanel {
 
         // Line 2: Active Metric highlighted
         textY += 19;
-        g2.setFont(new Font("SansSerif", Font.BOLD, 12));
+        g2.setFont(UiDefaults.font(Font.BOLD, 12));
         g2.setColor(primary);
         double activeVal = currentMetric.extractValue(f);
         String mainValStr = currentMetric.label + ": " + currentMetric.formatValue(activeVal);
@@ -404,7 +424,7 @@ public class WeatherChartPanel extends JPanel {
 
         // Line 3: Humidity & Precipitation
         textY += 18;
-        g2.setFont(new Font("SansSerif", Font.PLAIN, 10));
+        g2.setFont(UiDefaults.font(Font.PLAIN, 10));
         g2.setColor(cardBody);
         String sub1 = "湿度: " + f.humidity + "%  |  降水: " + String.format(Locale.US, "%.1fmm", f.precipitation);
         g2.drawString(sub1, textX, textY);

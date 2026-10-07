@@ -1,15 +1,13 @@
 package com.cn.schrodinger.understatus;
 
+import com.cn.schrodinger.understatus.toolbox.core.ToolTask;
+import com.cn.schrodinger.understatus.toolbox.core.ToolLimits;
 import java.awt.BorderLayout;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.GridLayout;
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
@@ -33,6 +31,9 @@ import javax.swing.event.DocumentListener;
  */
 public class TextTabPanel extends JPanel {
 
+    private final ToolTask tasks = new ToolTask(this);
+    private final ToolTask metricTasks = new ToolTask(this);
+    private final JLabel operationStatus = new JLabel(" ");
     private JTextArea textInputArea;
     private JTextArea textOutputArea;
     private JTextField findField;
@@ -40,14 +41,17 @@ public class TextTabPanel extends JPanel {
     private JLabel metricsLabel;
     private final javax.swing.Timer metricsDebounceTimer = new javax.swing.Timer(150, e -> updateMetrics());
 
-    private static final Pattern CAMEL_SPLIT_1 = Pattern.compile("([a-z0-9])([A-Z])");
-    private static final Pattern CAMEL_SPLIT_2 = Pattern.compile("([A-Z]+)([A-Z][a-z0-9])");
     private static final Pattern WORD_SPLIT = Pattern.compile("[_\\-\\s]+");
     private static final Pattern LINE_SPLIT = Pattern.compile("\r\n|\r|\n");
 
     public TextTabPanel() {
         metricsDebounceTimer.setRepeats(false);
         initComponents();
+        tasks.watch(textInputArea);
+        tasks.watch(findField);
+        tasks.watch(replaceField);
+        metricTasks.watch(textInputArea);
+        metricTasks.onShow(this::updateMetrics);
     }
 
     private void initComponents() {
@@ -89,34 +93,34 @@ public class TextTabPanel extends JPanel {
 
         JButton snakeBtn = new JButton("➔ snake_case");
         snakeBtn.setToolTipText("驼峰转下划线 (userProfile ➔ user_profile)");
-        snakeBtn.addActionListener(e -> textOutputArea.setText(toSnakeCase(textInputArea.getText())));
+        snakeBtn.addActionListener(e -> tasks.transform(textInputArea, textOutputArea, operationStatus, TextTabPanel::toSnakeCase));
 
         JButton camelBtn = new JButton("➔ camelCase");
         camelBtn.setToolTipText("下划线转小驼峰 (user_profile ➔ userProfile)");
-        camelBtn.addActionListener(e -> textOutputArea.setText(toCamelCase(textInputArea.getText())));
+        camelBtn.addActionListener(e -> tasks.transform(textInputArea, textOutputArea, operationStatus, TextTabPanel::toCamelCase));
 
         JButton pascalBtn = new JButton("➔ PascalCase");
         pascalBtn.setToolTipText("转大驼峰 (user_profile ➔ UserProfile)");
-        pascalBtn.addActionListener(e -> textOutputArea.setText(toPascalCase(textInputArea.getText())));
+        pascalBtn.addActionListener(e -> tasks.transform(textInputArea, textOutputArea, operationStatus, TextTabPanel::toPascalCase));
 
         JButton kebabBtn = new JButton("➔ kebab-case");
         kebabBtn.setToolTipText("转短横线连字符 (userProfile ➔ user-profile)");
-        kebabBtn.addActionListener(e -> textOutputArea.setText(toKebabCase(textInputArea.getText())));
+        kebabBtn.addActionListener(e -> tasks.transform(textInputArea, textOutputArea, operationStatus, TextTabPanel::toKebabCase));
 
         JButton upperBtn = new JButton("➔ 大写 (UPPER)");
-        upperBtn.addActionListener(e -> textOutputArea.setText(textInputArea.getText().toUpperCase()));
+        upperBtn.addActionListener(e -> tasks.transform(textInputArea, textOutputArea, operationStatus, value -> value.toUpperCase(java.util.Locale.ROOT)));
 
         JButton lowerBtn = new JButton("➔ 小写 (lower)");
-        lowerBtn.addActionListener(e -> textOutputArea.setText(textInputArea.getText().toLowerCase()));
+        lowerBtn.addActionListener(e -> tasks.transform(textInputArea, textOutputArea, operationStatus, value -> value.toLowerCase(java.util.Locale.ROOT)));
 
         JButton trimBtn = new JButton("去除行首尾空格");
-        trimBtn.addActionListener(e -> textOutputArea.setText(trimLines(textInputArea.getText())));
+        trimBtn.addActionListener(e -> tasks.transform(textInputArea, textOutputArea, operationStatus, TextTabPanel::trimLines));
 
         JButton dedupBtn = new JButton("文本行去重");
-        dedupBtn.addActionListener(e -> textOutputArea.setText(deduplicateLines(textInputArea.getText())));
+        dedupBtn.addActionListener(e -> tasks.transform(textInputArea, textOutputArea, operationStatus, TextTabPanel::deduplicateLines));
 
         JButton sortBtn = new JButton("文本行 A-Z 排序");
-        sortBtn.addActionListener(e -> textOutputArea.setText(sortLines(textInputArea.getText())));
+        sortBtn.addActionListener(e -> tasks.transform(textInputArea, textOutputArea, operationStatus, TextTabPanel::sortLines));
 
         toolsPanel.add(snakeBtn);
         toolsPanel.add(camelBtn);
@@ -186,56 +190,77 @@ public class TextTabPanel extends JPanel {
         metricsLabel = new JLabel("📊 行数: 1 | 字符数: 0 | 单词数: 0");
         metricsLabel.setFont(metricsLabel.getFont().deriveFont(11f));
         metricsLabel.setForeground(UIManager.getColor("Label.disabledForeground"));
-        southContainer.add(metricsLabel, BorderLayout.SOUTH);
+        JPanel footer = new JPanel(new GridLayout(2, 1));
+        footer.add(metricsLabel);
+        footer.add(operationStatus);
+        southContainer.add(footer, BorderLayout.SOUTH);
 
         add(southContainer, BorderLayout.SOUTH);
         updateMetrics();
     }
 
+    @Override public void removeNotify() {
+        metricsDebounceTimer.stop();
+        tasks.cancel();
+        metricTasks.cancel();
+        super.removeNotify();
+    }
+
     private void updateMetrics() {
-        String text = textInputArea.getText();
-        int charCount = text.length();
-        int lineCount = text.isEmpty() ? 0 : 1;
-        int wordCount = 0;
-        boolean inWord = false;
-        for (int i = 0; i < charCount; i++) {
-            char c = text.charAt(i);
-            if (c == '\n') {
-                lineCount++;
-            }
-            if (Character.isWhitespace(c)) {
-                inWord = false;
-            } else if (!inWord) {
-                inWord = true;
-                wordCount++;
-            }
-        }
-        metricsLabel.setText(String.format("📊 输入统计 · 行数: %d | 字符数: %d | 单词数: %d", lineCount, charCount, wordCount));
+        try {
+            String text = ToolTask.snapshot(textInputArea);
+            metricTasks.submit(() -> {
+                int lines = text.isEmpty() ? 0 : 1, words = 0;
+                boolean inWord = false;
+                for (int i = 0; i < text.length(); i++) {
+                    char ch = text.charAt(i);
+                    if (ch == '\n') lines++;
+                    if (Character.isWhitespace(ch)) inWord = false;
+                    else if (!inWord) { inWord = true; words++; }
+                }
+                return "行数: " + lines + " | 字符数: " + text.length() + " | 单词数: " + words;
+            }, metricsLabel::setText, metricsLabel::setText);
+        } catch (IllegalArgumentException ex) { metricsLabel.setText(ex.getMessage()); }
     }
 
     private void triggerReplace() {
-        String input = textInputArea.getText();
-        String find = findField.getText();
-        String replace = replaceField.getText();
-        if (find.isEmpty()) {
-            textOutputArea.setText(input);
-            return;
-        }
-        textOutputArea.setText(input.replace(find, replace));
+        try {
+            String find = ToolTask.snapshot(findField);
+            String replacement = ToolTask.snapshot(replaceField);
+            tasks.transform(textInputArea, textOutputArea, operationStatus, input -> {
+                if (find.isEmpty()) return input;
+                StringBuilder out = new StringBuilder();
+                int offset = 0, match;
+                while ((match = input.indexOf(find, offset)) >= 0) {
+                    ToolLimits.checkInterrupted();
+                    if ((long) out.length() + match - offset + replacement.length() > ToolLimits.MAX_OUTPUT) {
+                        throw new IllegalArgumentException("替换结果超过 500,000 字符限制");
+                    }
+                    out.append(input, offset, match).append(replacement);
+                    offset = match + find.length();
+                }
+                if ((long) out.length() + input.length() - offset > ToolLimits.MAX_OUTPUT) throw new IllegalArgumentException("替换结果超过限制");
+                return out.append(input, offset, input.length()).toString();
+            });
+        } catch (IllegalArgumentException ex) { tasks.cancel(); operationStatus.setText(ex.getMessage()); }
     }
 
     private static String toSnakeCase(String input) {
-        if (input == null || input.isEmpty()) return "";
-        String[] lines = LINE_SPLIT.split(input, -1);
-        StringBuilder sb = new StringBuilder(input.length() + 32);
-        for (int i = 0; i < lines.length; i++) {
-            if (i > 0) sb.append('\n');
-            String s = CAMEL_SPLIT_1.matcher(lines[i]).replaceAll("$1_$2");
-            s = CAMEL_SPLIT_2.matcher(s).replaceAll("$1_$2");
-            s = s.replace('-', '_');
-            sb.append(s.toLowerCase());
+        if (input == null) return "";
+        StringBuilder result = new StringBuilder();
+        for (int i = 0; i < input.length(); i++) {
+            char ch = input.charAt(i);
+            if (i > 0 && ch >= 'A' && ch <= 'Z') {
+                char previous = input.charAt(i - 1);
+                boolean lowerBefore = previous >= 'a' && previous <= 'z' || previous >= '0' && previous <= '9';
+                boolean capitalBefore = previous >= 'A' && previous <= 'Z';
+                boolean lowerAfter = i + 1 < input.length() && (input.charAt(i + 1) >= 'a' && input.charAt(i + 1) <= 'z'
+                        || input.charAt(i + 1) >= '0' && input.charAt(i + 1) <= '9');
+                if (lowerBefore || capitalBefore && lowerAfter) result.append('_');
+            }
+            result.append(ch == '-' ? '_' : ch);
         }
-        return sb.toString();
+        return result.toString().toLowerCase(java.util.Locale.ROOT);
     }
 
     private static String toCamelCase(String input) {

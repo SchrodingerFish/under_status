@@ -1,5 +1,6 @@
 package com.cn.schrodinger.understatus;
 
+import com.cn.schrodinger.understatus.toolbox.core.ToolTask;
 import com.cn.schrodinger.understatus.toolbox.core.JsonFormatter;
 
 import java.awt.BorderLayout;
@@ -21,6 +22,7 @@ import javax.swing.UIManager;
  */
 public class JsonTabPanel extends JPanel {
 
+    private final ToolTask tasks = new ToolTask(this);
     private JTextArea jsonTextArea;
     private JLabel statusLabel;
 
@@ -33,6 +35,7 @@ public class JsonTabPanel extends JPanel {
         setBorder(BorderFactory.createEmptyBorder(6, 6, 6, 6));
 
         jsonTextArea = new JTextArea();
+        tasks.watch(jsonTextArea);
         jsonTextArea.setFont(UIManager.getFont("TextArea.font").deriveFont(11f));
         jsonTextArea.setLineWrap(true);
         jsonTextArea.setWrapStyleWord(true);
@@ -88,38 +91,12 @@ public class JsonTabPanel extends JPanel {
     }
 
     private void triggerFormatting(int mode) {
-        String input = jsonTextArea.getText().trim();
-        if (input.isEmpty()) {
-            statusLabel.setText("请输入或粘贴 JSON 内容");
-            statusLabel.setForeground(new Color(220, 50, 50));
-            return;
-        }
-        try {
-            switch (mode) {
-                case 1 -> {
-                    jsonTextArea.setText(JsonFormatter.format(input));
-                    statusLabel.setText("已完成美化格式化");
-                    statusLabel.setForeground(new Color(40, 160, 80));
-                }
-                case 2 -> {
-                    jsonTextArea.setText(JsonFormatter.minify(input));
-                    statusLabel.setText("已完成压缩压缩行");
-                    statusLabel.setForeground(new Color(40, 160, 80));
-                }
-                case 3 -> {
-                    jsonTextArea.setText(JsonFormatter.escape(input));
-                    statusLabel.setText("已转义为 Java 字符串文本");
-                    statusLabel.setForeground(new Color(40, 160, 80));
-                }
-                case 4 -> {
-                    jsonTextArea.setText(JsonFormatter.unescape(input));
-                    statusLabel.setText("已去除转义字符");
-                    statusLabel.setForeground(new Color(40, 160, 80));
-                }
-            }
-        } catch (Exception ex) {
-            statusLabel.setText("处理失败: " + ex.getMessage());
-            statusLabel.setForeground(new Color(220, 50, 50));
-        }
+        tasks.transform(jsonTextArea, jsonTextArea, statusLabel, input -> switch (mode) {
+            case 1 -> JsonFormatter.format(input);
+            case 2 -> JsonFormatter.minify(input);
+            case 3 -> JsonFormatter.escape(input);
+            case 4 -> JsonFormatter.unescape(input);
+            default -> throw new IllegalArgumentException("Unknown operation");
+        });
     }
 }

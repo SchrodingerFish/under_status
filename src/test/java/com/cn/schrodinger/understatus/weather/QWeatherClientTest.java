@@ -192,6 +192,23 @@ class QWeatherClientTest {
     }
 
     @Test
+    void authenticationAndCancellationDoNotTriggerAirEndpointFallback() {
+        for (WeatherException.Kind kind : new WeatherException.Kind[]{
+                WeatherException.Kind.AUTHENTICATION, WeatherException.Kind.CANCELLED,
+                WeatherException.Kind.RATE_LIMIT, WeatherException.Kind.TIMEOUT}) {
+            java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+            HttpTransport transport = uri -> {
+                calls.incrementAndGet();
+                throw new WeatherException(kind, "request failed");
+            };
+            WeatherException error = assertThrows(WeatherException.class,
+                    () -> new QWeatherClient(transport).fetchAirQuality(CONFIG, BEIJING));
+            assertEquals(kind, error.kind());
+            assertEquals(1, calls.get());
+        }
+    }
+
+    @Test
     void mapsHistoricalWeatherAndRejectsToday() throws Exception {
         RecordingTransport transport = new RecordingTransport();
         LocalDate yesterday = LocalDate.now(BEIJING.zoneId()).minusDays(1);

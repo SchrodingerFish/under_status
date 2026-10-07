@@ -8,7 +8,8 @@ import java.awt.Font;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
-import java.util.regex.Matcher;
+import com.cn.schrodinger.understatus.toolbox.core.RegexEvaluator;
+import com.cn.schrodinger.understatus.toolbox.core.ToolTask;
 import java.util.regex.Pattern;
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
@@ -35,6 +36,7 @@ import javax.swing.text.Highlighter;
  */
 public class RegexTabPanel extends JPanel {
 
+    private final ToolTask tasks = new ToolTask(this);
     private JTextField regexField;
     private JComboBox<PresetItem> presetComboBox;
     private JCheckBox caseInsensitiveCheck;
@@ -75,6 +77,10 @@ public class RegexTabPanel extends JPanel {
         this.regexDebounceTimer.setRepeats(false);
         this.highlightPainter = new DefaultHighlighter.DefaultHighlightPainter(new Color(255, 230, 130));
         initComponents();
+        tasks.watch(regexField);
+        tasks.watch(testTextArea);
+        tasks.watch(replaceField);
+        tasks.onShow(this::runRegex);
     }
 
     private void initComponents() {
@@ -229,72 +235,43 @@ public class RegexTabPanel extends JPanel {
         runRegex();
     }
 
+    @Override
+    public void removeNotify() {
+        regexDebounceTimer.stop();
+        tasks.cancel();
+        super.removeNotify();
+    }
+
     private void runRegex() {
-        Highlighter highlighter = testTextArea.getHighlighter();
-        highlighter.removeAllHighlights();
-
-        String regex = regexField.getText().trim();
-        String text = testTextArea.getText();
-
-        if (regex.isEmpty()) {
-            statusLabel.setText("请输入正则表达式");
-            statusLabel.setForeground(UIManager.getColor("Label.foreground"));
-            resultArea.setText("");
-            return;
-        }
-
-        int flags = 0;
-        if (caseInsensitiveCheck.isSelected()) flags |= Pattern.CASE_INSENSITIVE;
-        if (multilineCheck.isSelected()) flags |= Pattern.MULTILINE;
-
+        tasks.cancel();
+        testTextArea.getHighlighter().removeAllHighlights();
         try {
-            Pattern pattern = Pattern.compile(regex, flags);
-            Matcher matcher = pattern.matcher(text);
-
-            int matches = 0;
-            final int MAX_MATCHES = 500;
-            boolean truncated = false;
-            StringBuilder groupOutput = new StringBuilder();
-
-            while (matcher.find()) {
-                matches++;
-                if (matches <= MAX_MATCHES) {
-                    highlighter.addHighlight(matcher.start(), matcher.end(), highlightPainter);
-                    if (!replaceCheck.isSelected()) {
-                        groupOutput.append(String.format("【匹配 #%d】: \"%s\" (位置: %d~%d)\n",
-                                matches, matcher.group(0), matcher.start(), matcher.end()));
-                        int groupCount = matcher.groupCount();
-                        for (int g = 1; g <= groupCount; g++) {
-                            groupOutput.append(String.format("   └─ Group %d: \"%s\"\n", g, matcher.group(g)));
-                        }
-                    }
-                } else if (!truncated) {
-                    truncated = true;
-                    if (!replaceCheck.isSelected()) {
-                        groupOutput.append("\n⚠️ 匹配数量较多，为保障界面流畅已截断展示前 500 个匹配结果。\n");
-                    }
+            String regex = ToolTask.snapshot(regexField);
+            String text = ToolTask.snapshot(testTextArea);
+            String replacement = replaceCheck.isSelected() ? ToolTask.snapshot(replaceField) : null;
+            int flags = (caseInsensitiveCheck.isSelected() ? Pattern.CASE_INSENSITIVE : 0)
+                    | (multilineCheck.isSelected() ? Pattern.MULTILINE : 0);
+            if (regex.isEmpty()) {
+                statusLabel.setText("请输入正则表达式");
+                resultArea.setText("");
+                return;
+            }
+            statusLabel.setText("计算中… (最多 2 秒，含隔离进程启动)");
+            tasks.submit(() -> RegexEvaluator.evaluate(regex, text, flags, replacement), result -> {
+                for (RegexEvaluator.Span span : result.spans()) {
+                    try { testTextArea.getHighlighter().addHighlight(span.start(), span.end(), highlightPainter); }
+                    catch (javax.swing.text.BadLocationException ex) { throw new IllegalStateException(ex); }
                 }
-            }
+                resultArea.setText(result.output());
+                statusLabel.setText("匹配: " + result.spans().size() + (result.truncated() ? "，已截断" : ""));
+                statusLabel.setForeground(UIManager.getColor("Label.foreground"));
+            }, this::showRegexError);
+        } catch (IllegalArgumentException ex) { showRegexError(ex.getMessage()); }
+    }
 
-            if (replaceCheck.isSelected()) {
-                String replacement = replaceField.getText();
-                String replaced = pattern.matcher(text).replaceAll(replacement);
-                resultArea.setText(replaced);
-                statusLabel.setText(String.format("匹配段数: %d 段 | 替换模式已生效", matches));
-            } else {
-                resultArea.setText(groupOutput.length() > 0 ? groupOutput.toString() : "无分组匹配信息");
-                statusLabel.setText(String.format("匹配段数: %d 段 (Matches: %d)", matches, matches));
-            }
-
-            statusLabel.setForeground(UIManager.getColor("Label.foreground"));
-        } catch (java.util.regex.PatternSyntaxException ex) {
-            statusLabel.setText("正则语法错误 (Regex Syntax Error): " + ex.getDescription());
-            statusLabel.setForeground(Color.RED);
-            resultArea.setText("错误位置: " + ex.getIndex() + "\n" + ex.getMessage());
-        } catch (Exception ex) {
-            statusLabel.setText("匹配失败: " + ex.getMessage());
-            statusLabel.setForeground(Color.RED);
-            resultArea.setText(ex.toString());
-        }
+    private void showRegexError(String error) {
+        statusLabel.setText("匹配失败: " + error);
+        statusLabel.setForeground(Color.RED);
+        resultArea.setText("");
     }
 }

@@ -1,3 +1,4 @@
 Manifest-Version: 1.0
+OpenIDE-Module-Java-Dependencies: Java > 21
 OpenIDE-Module-Layer: com/cn/schrodinger/understatus/layer.xml
 OpenIDE-Module-Localizing-Bundle: com/cn/schrodinger/understatus/Bundle.properties

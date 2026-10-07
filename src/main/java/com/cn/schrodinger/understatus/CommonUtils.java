@@ -9,6 +9,8 @@ import org.openide.awt.StatusDisplayer;
  */
 public class CommonUtils {
 
+    private static final java.security.SecureRandom PASSWORD_RANDOM = new java.security.SecureRandom();
+
     public static void copyToClipboard(String text) {
         if (text == null || text.isEmpty()) {
             return;
@@ -37,10 +39,11 @@ public class CommonUtils {
     }
 
     public static String generateRandomString(int len) {
+        if (len < 0 || len > 4096) throw new IllegalArgumentException("密码长度必须在 0 到 4096 之间");
         String chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()_+";
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < len; i++) {
-            int idx = (int)(Math.random() * chars.length());
+            int idx = PASSWORD_RANDOM.nextInt(chars.length());
             sb.append(chars.charAt(idx));
         }
         return sb.toString();

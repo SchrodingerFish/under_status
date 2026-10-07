@@ -47,7 +47,9 @@
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <maven.compiler.release>17</maven.compiler.release>
+        <maven.compiler.release>21</maven.compiler.release>
+        <understatus.build.directory>${project.basedir}/target</understatus.build.directory>
+        <jackson.version>2.18.6</jackson.version>
 
         <!-- Platform / libs -->
         <netbeans.version>RELEASE300</netbeans.version>
@@ -67,6 +69,11 @@
     </properties>
 
     <dependencies>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson.version}</version>
+        </dependency>
         <!-- NetBeans Platform APIs -->
         <dependency>
             <groupId>org.netbeans.api</groupId>
@@ -150,7 +157,8 @@
     </dependencies>
 
     <build>
-        <finalName>understatus</finalName>
+        <directory>${understatus.build.directory}</directory>
+        <finalName>under_status</finalName>
 
         <pluginManagement>
             <plugins>
@@ -265,6 +273,13 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-enforcer-plugin</artifactId>
+                <dependencies>
+                    <dependency>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>extra-enforcer-rules</artifactId>
+                        <version>1.10.0</version>
+                    </dependency>
+                </dependencies>
                 <executions>
                     <execution>
                         <id>enforce-build-environment</id>
@@ -274,13 +289,32 @@
                         <configuration>
                             <rules>
                                 <requireJavaVersion>
-                                    <version>[17,)</version>
+                                    <version>[21,)</version>
                                 </requireJavaVersion>
                                 <requireMavenVersion>
                                     <version>[3.8.1,)</version>
                                 </requireMavenVersion>
+                                <enforceBytecodeVersion>
+                                    <maxJdkVersion>21</maxJdkVersion>
+                                </enforceBytecodeVersion>
                             </rules>
                         </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>0.8.14</version>
+                <executions>
+                    <execution>
+                        <goals><goal>prepare-agent</goal></goals>
+                    </execution>
+                    <execution>
+                        <id>coverage-report</id>
+                        <phase>verify</phase>
+                        <goals><goal>report</goal></goals>
                     </execution>
                 </executions>
             </plugin>

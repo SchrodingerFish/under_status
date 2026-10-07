@@ -1,5 +1,6 @@
 package com.cn.schrodinger.understatus;
 
+import com.cn.schrodinger.understatus.toolbox.core.ToolTask;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.FlowLayout;
@@ -32,6 +33,7 @@ import javax.swing.UIManager;
  */
 public class UtilsTabPanel extends JPanel {
 
+    private final ToolTask tasks = new ToolTask(this);
     private JTextField codecInputField;
     private JTextField codecOutputField;
     private JLabel codecStatusLabel;
@@ -46,6 +48,7 @@ public class UtilsTabPanel extends JPanel {
 
     public UtilsTabPanel() {
         initComponents();
+        tasks.watch(codecInputField);
     }
 
     private void initComponents() {
@@ -192,22 +195,13 @@ public class UtilsTabPanel extends JPanel {
     }
 
     private void triggerCodec(int mode) {
-        codecStatusLabel.setText(" ");
-        String input = codecInputField.getText();
-        if (input.isEmpty()) {
-            codecOutputField.setText("");
-            return;
-        }
-        try {
-            switch (mode) {
-                case 1 -> codecOutputField.setText(Base64.getEncoder().encodeToString(input.getBytes(StandardCharsets.UTF_8)));
-                case 2 -> codecOutputField.setText(new String(Base64.getDecoder().decode(input.trim()), StandardCharsets.UTF_8));
-                case 3 -> codecOutputField.setText(URLEncoder.encode(input, StandardCharsets.UTF_8));
-                case 4 -> codecOutputField.setText(URLDecoder.decode(input, StandardCharsets.UTF_8));
-            }
-        } catch (Exception ex) {
-            codecStatusLabel.setText("编解码失败: " + ex.getMessage());
-        }
+        tasks.transform(codecInputField, codecOutputField, codecStatusLabel, input -> switch (mode) {
+            case 1 -> Base64.getEncoder().encodeToString(input.getBytes(StandardCharsets.UTF_8));
+            case 2 -> new String(Base64.getDecoder().decode(input.trim()), StandardCharsets.UTF_8);
+            case 3 -> URLEncoder.encode(input, StandardCharsets.UTF_8);
+            case 4 -> URLDecoder.decode(input, StandardCharsets.UTF_8);
+            default -> throw new IllegalArgumentException("Unknown codec");
+        });
     }
 
     private void triggerTimestampToDate() {

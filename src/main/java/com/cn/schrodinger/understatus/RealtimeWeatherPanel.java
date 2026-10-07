@@ -45,15 +45,24 @@ public class RealtimeWeatherPanel extends JPanel {
         scrollPane.getVerticalScrollBar().setUnitIncrement(16);
         add(scrollPane, BorderLayout.CENTER);
 
-        renderEmpty("正在加载实时天气数据…");
+        renderEmpty(UiDefaults.text("Weather.now.loading"));
     }
 
     public void setCityWeather(WeatherNow w, String locationName, boolean isStale) {
         if (w == null) {
-            renderEmpty("暂无城市实时天气数据");
+            renderEmpty(UiDefaults.text("Weather.now.empty"));
             return;
         }
 
+        UiDefaults.textAlternative(this, UiDefaults.text("Weather.now.name"),
+                UiDefaults.text("Weather.now.summary", locationName == null ? UiDefaults.text("Status.unavailable") : locationName,
+                        w.updateTime() == null ? UiDefaults.text("Status.unavailable") : w.updateTime(),
+                        UiDefaults.text(isStale ? "Status.stale" : "Status.current"), w.temperatureCelsius(),
+                        w.condition(), w.windDirection(), w.windSpeedKph(), w.humidityPercent(),
+                        w.precipitationMm(), w.pressureHpa(),
+                        w.cloudPercent() == null ? UiDefaults.text("Status.unavailable") : w.cloudPercent() + "%",
+                        w.dewPointCelsius() == null ? UiDefaults.text("Status.unavailable") : w.dewPointCelsius() + "°C")
+                + UiDefaults.text("Weather.now.station", w.feelsLikeCelsius(), w.visibilityKm()));
         contentPanel.removeAll();
         boolean isDark = isDarkTheme();
 
@@ -143,10 +152,18 @@ public class RealtimeWeatherPanel extends JPanel {
 
     public void setGridWeather(GridWeatherNow w, String coordinate, boolean isStale) {
         if (w == null) {
-            renderEmpty("暂无格点实时天气数据");
+            renderEmpty(UiDefaults.text("Weather.grid.empty"));
             return;
         }
 
+        UiDefaults.textAlternative(this, UiDefaults.text("Weather.now.name"),
+                UiDefaults.text("Weather.now.summary", coordinate == null ? UiDefaults.text("Status.unavailable") : coordinate,
+                        w.updateTime() == null ? UiDefaults.text("Status.unavailable") : w.updateTime(),
+                        UiDefaults.text(isStale ? "Status.stale" : "Status.current"), w.temperatureCelsius(),
+                        w.condition(), w.windDirection(), w.windSpeedKph(), w.humidityPercent(),
+                        w.precipitationMm(), w.pressureHpa(),
+                        w.cloudPercent() == null ? UiDefaults.text("Status.unavailable") : w.cloudPercent() + "%",
+                        w.dewPointCelsius() == null ? UiDefaults.text("Status.unavailable") : w.dewPointCelsius() + "°C"));
         contentPanel.removeAll();
         boolean isDark = isDarkTheme();
 
@@ -241,8 +258,8 @@ public class RealtimeWeatherPanel extends JPanel {
             protected void paintComponent(Graphics g) {
                 Graphics2D g2 = (Graphics2D) g.create();
                 g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                Color bgTop = isDark ? new Color(36, 44, 62) : new Color(242, 248, 255);
-                Color bgBottom = isDark ? new Color(28, 34, 48) : new Color(230, 240, 252);
+                Color bgTop = UiDefaults.background();
+                Color bgBottom = UiDefaults.background();
                 g2.setPaint(new java.awt.GradientPaint(0, 0, bgTop, 0, getHeight(), bgBottom));
                 g2.fillRoundRect(0, 0, getWidth(), getHeight(), 16, 16);
                 g2.setColor(isDark ? new Color(64, 76, 102) : new Color(210, 224, 242));
@@ -263,8 +280,8 @@ public class RealtimeWeatherPanel extends JPanel {
         left.add(emojiLabel);
 
         JLabel tempLabel = new JLabel(temp + "°");
-        tempLabel.setFont(new Font("SansSerif", Font.BOLD, 46));
-        tempLabel.setForeground(isDark ? new Color(240, 246, 255) : new Color(20, 35, 60));
+        tempLabel.setFont(UiDefaults.font(Font.BOLD, 46));
+        tempLabel.setForeground(UiDefaults.foreground());
         left.add(tempLabel);
 
         JPanel badgeStack = new JPanel(new GridLayout(2, 1, 4, 4));
@@ -285,8 +302,8 @@ public class RealtimeWeatherPanel extends JPanel {
         badgeStack.add(badgesRow);
 
         JLabel windLabel = new JLabel(windSummary);
-        windLabel.setFont(new Font("SansSerif", Font.PLAIN, 12));
-        windLabel.setForeground(isDark ? new Color(170, 185, 205) : new Color(90, 105, 125));
+        windLabel.setFont(UiDefaults.font(Font.PLAIN, 12));
+        windLabel.setForeground(UiDefaults.foreground());
         badgeStack.add(windLabel);
 
         left.add(badgeStack);
@@ -298,18 +315,17 @@ public class RealtimeWeatherPanel extends JPanel {
         right.setOpaque(false);
 
         JLabel locLabel = new JLabel(locationLabel);
-        locLabel.setFont(new Font("SansSerif", Font.BOLD, 13));
-        locLabel.setForeground(isDark ? new Color(225, 235, 250) : new Color(30, 45, 70));
+        locLabel.setFont(UiDefaults.font(Font.BOLD, 13));
+        locLabel.setForeground(UiDefaults.foreground());
         locLabel.setAlignmentX(1.0f);
         right.add(locLabel);
 
         right.add(Box.createRigidArea(new Dimension(0, 4)));
 
-        String timeStr = "更新于 " + updateTime + (isStale ? " (缓存)" : " (实时)");
+        String timeStr = UiDefaults.text("Weather.updated", updateTime, UiDefaults.text(isStale ? "Status.stale" : "Status.current"));
         JLabel timeLabel = new JLabel(timeStr);
-        timeLabel.setFont(new Font("SansSerif", Font.PLAIN, 11));
-        timeLabel.setForeground(isStale ? new Color(245, 158, 11)
-                : (isDark ? new Color(145, 160, 180) : new Color(110, 125, 145)));
+        timeLabel.setFont(UiDefaults.font(Font.PLAIN, 11));
+        timeLabel.setForeground(UiDefaults.foreground());
         timeLabel.setAlignmentX(1.0f);
         right.add(timeLabel);
 
@@ -328,8 +344,8 @@ public class RealtimeWeatherPanel extends JPanel {
 
     private JPanel createMetricTile(String title, String value, String subtitle, Color accentColor, boolean isDark) {
         JPanel tile = new JPanel(new BorderLayout(6, 4));
-        Color bg = isDark ? new Color(34, 40, 54) : new Color(255, 255, 255);
-        Color border = isDark ? new Color(55, 65, 85) : new Color(225, 232, 242);
+        Color bg = UiDefaults.background();
+        Color border = UiDefaults.border();
         tile.setBackground(bg);
         tile.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(border, 1, true),
@@ -340,21 +356,21 @@ public class RealtimeWeatherPanel extends JPanel {
         JPanel topRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
         topRow.setOpaque(false);
         JLabel titleLabel = new JLabel(title);
-        titleLabel.setFont(new Font("SansSerif", Font.PLAIN, 11));
-        titleLabel.setForeground(isDark ? new Color(160, 175, 195) : new Color(95, 110, 130));
+        titleLabel.setFont(UiDefaults.font(Font.PLAIN, 11));
+        titleLabel.setForeground(UiDefaults.foreground());
         topRow.add(titleLabel);
         tile.add(topRow, BorderLayout.NORTH);
 
         // Big value
         JLabel valLabel = new JLabel(value);
-        valLabel.setFont(new Font("SansSerif", Font.BOLD, 15));
-        valLabel.setForeground(isDark ? new Color(235, 242, 252) : new Color(25, 40, 60));
+        valLabel.setFont(UiDefaults.font(Font.BOLD, 15));
+        valLabel.setForeground(UiDefaults.foreground());
         tile.add(valLabel, BorderLayout.CENTER);
 
         // Subtitle / qualitative hint
         JLabel subLabel = new JLabel(subtitle);
-        subLabel.setFont(new Font("SansSerif", Font.PLAIN, 10));
-        subLabel.setForeground(isDark ? new Color(140, 155, 175) : new Color(120, 135, 155));
+        subLabel.setFont(UiDefaults.font(Font.PLAIN, 10));
+        subLabel.setForeground(UiDefaults.foreground());
         tile.add(subLabel, BorderLayout.SOUTH);
 
         return tile;
@@ -362,10 +378,10 @@ public class RealtimeWeatherPanel extends JPanel {
 
     private JLabel createPillBadge(String text, Color bg, Color fg) {
         JLabel badge = new JLabel(" " + text + " ");
-        badge.setFont(new Font("SansSerif", Font.BOLD, 11));
+        badge.setFont(UiDefaults.font(Font.BOLD, 11));
         badge.setOpaque(true);
         badge.setBackground(bg);
-        badge.setForeground(fg);
+        badge.setForeground(UiDefaults.onColor(bg));
         badge.setBorder(BorderFactory.createEmptyBorder(2, 6, 2, 6));
         return badge;
     }
@@ -385,11 +401,12 @@ public class RealtimeWeatherPanel extends JPanel {
     }
 
     private void renderEmpty(String msg) {
+        UiDefaults.textAlternative(this, UiDefaults.text("Weather.now.name"), msg);
         contentPanel.removeAll();
         JLabel label = new JLabel(msg);
         label.setHorizontalAlignment(JLabel.CENTER);
-        label.setFont(new Font("SansSerif", Font.PLAIN, 13));
-        label.setForeground(Color.GRAY);
+        label.setFont(UiDefaults.font(Font.PLAIN, 13));
+        label.setForeground(UiDefaults.foreground());
         label.setBorder(BorderFactory.createEmptyBorder(40, 0, 40, 0));
         contentPanel.add(label);
         contentPanel.revalidate();

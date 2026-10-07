@@ -13,7 +13,7 @@ import java.util.List;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
-import javax.swing.JButton;
+import javax.swing.JToggleButton;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
@@ -28,9 +28,9 @@ import javax.swing.UIManager;
 public class WeatherIndicesPanel extends JPanel {
 
     private List<WeatherIndex> allIndices = List.of();
-    private String selectedCategory = "全部";
+    private String selectedCategory = UiDefaults.text("Weather.indices.all");
     private final JPanel cardsContainer = new JPanel();
-    private final List<JButton> filterButtons = new ArrayList<>();
+    private final List<JToggleButton> filterButtons = new ArrayList<>();
 
     public WeatherIndicesPanel() {
         setLayout(new BorderLayout(0, 8));
@@ -40,16 +40,16 @@ public class WeatherIndicesPanel extends JPanel {
         // Top category filter bar
         JPanel filterBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
         filterBar.setOpaque(false);
-        String[] categories = new String[]{"全部", "健康", "出行", "生活"};
+        String[] categories = new String[]{UiDefaults.text("Weather.indices.all"), UiDefaults.text("Weather.indices.health"), UiDefaults.text("Weather.indices.travel"), UiDefaults.text("Weather.indices.life")};
         for (String cat : categories) {
-            JButton btn = new JButton(cat);
-            btn.setFont(new Font("SansSerif", Font.PLAIN, 12));
-            btn.setFocusPainted(false);
+            JToggleButton btn = new JToggleButton(cat);
+            btn.setFont(UiDefaults.font(Font.PLAIN, 12));
+            UiDefaults.describe(btn, cat, UiDefaults.text("Weather.indices.filterHint", cat));
             btn.setMargin(new Insets(3, 12, 3, 12));
             updateButtonAppearance(btn, cat.equals(selectedCategory));
             btn.addActionListener(e -> {
                 selectedCategory = cat;
-                for (JButton b : filterButtons) {
+                for (JToggleButton b : filterButtons) {
                     updateButtonAppearance(b, b.getText().equals(selectedCategory));
                 }
                 renderCards();
@@ -69,6 +69,7 @@ public class WeatherIndicesPanel extends JPanel {
         scrollPane.setBorder(BorderFactory.createEmptyBorder());
         scrollPane.getVerticalScrollBar().setUnitIncrement(16);
         add(scrollPane, BorderLayout.CENTER);
+        renderCards();
     }
 
     public void setIndices(List<WeatherIndex> indices) {
@@ -78,11 +79,13 @@ public class WeatherIndicesPanel extends JPanel {
 
     private void renderCards() {
         cardsContainer.removeAll();
+        StringBuilder accessibleData = new StringBuilder(UiDefaults.text("Weather.indices.filterHint", selectedCategory));
         if (allIndices.isEmpty()) {
-            JLabel emptyLabel = new JLabel("暂无天气生活指数数据");
+            UiDefaults.textAlternative(this, UiDefaults.text("Weather.indices.name"), UiDefaults.text("Weather.indices.empty"));
+            JLabel emptyLabel = new JLabel(UiDefaults.text("Weather.indices.empty"));
             emptyLabel.setHorizontalAlignment(JLabel.CENTER);
-            emptyLabel.setFont(new Font("SansSerif", Font.PLAIN, 13));
-            emptyLabel.setForeground(Color.GRAY);
+            emptyLabel.setFont(UiDefaults.font(Font.PLAIN, 13));
+            emptyLabel.setForeground(UiDefaults.foreground());
             cardsContainer.setLayout(new BorderLayout());
             cardsContainer.add(emptyLabel, BorderLayout.CENTER);
             cardsContainer.revalidate();
@@ -95,20 +98,24 @@ public class WeatherIndicesPanel extends JPanel {
 
         for (WeatherIndex item : allIndices) {
             String group = resolveGroup(item.type());
-            if (!"全部".equals(selectedCategory) && !group.equals(selectedCategory)) {
+            if (!UiDefaults.text("Weather.indices.all").equals(selectedCategory) && !group.equals(selectedCategory)) {
                 continue;
             }
+            accessibleData.append("\n").append(UiDefaults.text("Weather.indices.row",
+                    item.date(), item.name(), item.level(), item.category(), item.description()));
             cardsContainer.add(createIndexCard(item, isDark));
         }
 
+        if (cardsContainer.getComponentCount() == 0) accessibleData.append("\n").append(UiDefaults.text("Weather.indices.empty"));
+        UiDefaults.textAlternative(this, UiDefaults.text("Weather.indices.name"), accessibleData.toString());
         cardsContainer.revalidate();
         cardsContainer.repaint();
     }
 
     private JPanel createIndexCard(WeatherIndex index, boolean isDark) {
         JPanel card = new JPanel(new BorderLayout(8, 6));
-        Color bg = isDark ? new Color(34, 40, 54) : new Color(255, 255, 255);
-        Color border = isDark ? new Color(60, 72, 94) : new Color(225, 232, 242);
+        Color bg = UiDefaults.background();
+        Color border = UiDefaults.border();
         card.setBackground(bg);
         card.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(border, 1, true),
@@ -121,8 +128,8 @@ public class WeatherIndicesPanel extends JPanel {
 
         String emoji = getIndexEmoji(index.type());
         JLabel titleLabel = new JLabel(emoji + " " + index.name());
-        titleLabel.setFont(new Font("SansSerif", Font.BOLD, 13));
-        titleLabel.setForeground(isDark ? new Color(230, 238, 250) : new Color(30, 40, 60));
+        titleLabel.setFont(UiDefaults.font(Font.BOLD, 13));
+        titleLabel.setForeground(UiDefaults.foreground());
         topRow.add(titleLabel, BorderLayout.WEST);
 
         // Level Badge with semantic color
@@ -130,11 +137,11 @@ public class WeatherIndicesPanel extends JPanel {
                 ? index.category() : ("等级 " + index.level());
         JLabel badgeLabel = new JLabel(" " + levelCategory + " ");
         badgeLabel.setOpaque(true);
-        badgeLabel.setFont(new Font("SansSerif", Font.BOLD, 11));
+        badgeLabel.setFont(UiDefaults.font(Font.BOLD, 11));
         badgeLabel.setBorder(BorderFactory.createEmptyBorder(2, 6, 2, 6));
 
         Color badgeBg = getBadgeColor(index.level(), index.category(), isDark);
-        Color badgeFg = isDark ? new Color(245, 250, 255) : Color.WHITE;
+        Color badgeFg = UiDefaults.onColor(badgeBg);
         badgeLabel.setBackground(badgeBg);
         badgeLabel.setForeground(badgeFg);
         topRow.add(badgeLabel, BorderLayout.EAST);
@@ -147,8 +154,8 @@ public class WeatherIndicesPanel extends JPanel {
         descArea.setLineWrap(true);
         descArea.setEditable(false);
         descArea.setOpaque(false);
-        descArea.setFont(new Font("SansSerif", Font.PLAIN, 12));
-        descArea.setForeground(isDark ? new Color(170, 185, 205) : new Color(85, 100, 120));
+        descArea.setFont(UiDefaults.font(Font.PLAIN, 12));
+        descArea.setForeground(UiDefaults.foreground());
         descArea.setBorder(BorderFactory.createEmptyBorder(4, 0, 0, 0));
         card.add(descArea, BorderLayout.CENTER);
 
@@ -187,22 +194,19 @@ public class WeatherIndicesPanel extends JPanel {
         };
     }
 
-    private void updateButtonAppearance(JButton btn, boolean active) {
-        boolean isDark = isDarkTheme();
-        if (active) {
-            btn.setBackground(new Color(24, 144, 255));
-            btn.setForeground(Color.WHITE);
-        } else {
-            btn.setBackground(isDark ? new Color(45, 55, 75) : new Color(240, 244, 250));
-            btn.setForeground(isDark ? new Color(200, 215, 235) : new Color(60, 75, 95));
-        }
+    private void updateButtonAppearance(JToggleButton btn, boolean active) {
+        btn.setSelected(active);
+        btn.setBackground(active ? UiDefaults.color("List.selectionBackground", UiDefaults.background())
+                : UiDefaults.color("Button.background", UiDefaults.background()));
+        btn.setForeground(active ? UiDefaults.color("List.selectionForeground", UiDefaults.foreground())
+                : UiDefaults.color("Button.foreground", UiDefaults.foreground()));
     }
 
     private static String resolveGroup(int type) {
         return switch (type) {
-            case 1, 4, 6, 15 -> "出行";
-            case 7, 8, 9, 10, 16 -> "健康";
-            default -> "生活";
+            case 1, 4, 6, 15 -> UiDefaults.text("Weather.indices.travel");
+            case 7, 8, 9, 10, 16 -> UiDefaults.text("Weather.indices.health");
+            default -> UiDefaults.text("Weather.indices.life");
         };
     }
 

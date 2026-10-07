@@ -1,5 +1,6 @@
 package com.cn.schrodinger.understatus;
 
+import com.cn.schrodinger.understatus.toolbox.core.ToolTask;
 import com.cn.schrodinger.understatus.toolbox.core.HashCalculator;
 
 import java.awt.BorderLayout;
@@ -24,6 +25,7 @@ import javax.swing.event.DocumentListener;
  * @author peter/antigravity
  */
 public class HashTabPanel extends JPanel {
+    private final ToolTask tasks = new ToolTask(this);
 
     private JTextArea inputTextArea;
     private JTextField md5Field;
@@ -37,6 +39,8 @@ public class HashTabPanel extends JPanel {
         debounceTimer = new javax.swing.Timer(150, e -> runHash());
         debounceTimer.setRepeats(false);
         initComponents();
+        tasks.watch(inputTextArea);
+        tasks.onShow(this::runHash);
         runHash();
     }
 
@@ -124,10 +128,23 @@ public class HashTabPanel extends JPanel {
     }
 
     private void runHash() {
-        String input = inputTextArea.getText();
-        md5Field.setText(HashCalculator.calculateHash(input, "MD5"));
-        sha1Field.setText(HashCalculator.calculateHash(input, "SHA-1"));
-        sha256Field.setText(HashCalculator.calculateHash(input, "SHA-256"));
-        sha512Field.setText(HashCalculator.calculateHash(input, "SHA-512"));
+        try {
+            String input = ToolTask.snapshot(inputTextArea);
+            tasks.submit(() -> new String[]{
+                HashCalculator.calculateHash(input, "MD5"), HashCalculator.calculateHash(input, "SHA-1"),
+                HashCalculator.calculateHash(input, "SHA-256"), HashCalculator.calculateHash(input, "SHA-512")
+            }, result -> {
+                md5Field.setText(result[0]); sha1Field.setText(result[1]);
+                sha256Field.setText(result[2]); sha512Field.setText(result[3]);
+            }, error -> { md5Field.setText(error); sha1Field.setText(""); sha256Field.setText(""); sha512Field.setText(""); });
+        } catch (IllegalArgumentException ex) {
+            tasks.cancel();
+            md5Field.setText(ex.getMessage()); sha1Field.setText(""); sha256Field.setText(""); sha512Field.setText("");
+        }
+    }
+    @Override public void removeNotify() {
+        debounceTimer.stop();
+        tasks.cancel();
+        super.removeNotify();
     }
 }

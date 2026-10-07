@@ -12,6 +12,30 @@ import org.junit.jupiter.api.Test;
 class WeatherCacheTest {
 
     @Test
+    void evictsLeastRecentlyUsedEntryAndExpiresStaleRetention() {
+        MutableClock clock = new MutableClock();
+        WeatherCache cache = new WeatherCache(clock, 2, Duration.ofHours(1));
+        WeatherCacheKey first = key("first");
+        WeatherCacheKey second = key("second");
+        WeatherCacheKey third = key("third");
+        cache.put(first, "one", Duration.ofMinutes(5));
+        cache.put(second, "two", Duration.ofMinutes(5));
+        cache.get(first, String.class);
+        cache.put(third, "three", Duration.ofMinutes(5));
+        assertTrue(cache.get(second, String.class).isEmpty());
+        assertTrue(cache.get(first, String.class).isPresent());
+        clock.instant = clock.instant.plus(Duration.ofMinutes(6));
+        assertTrue(cache.get(first, String.class).orElseThrow().stale());
+        clock.instant = clock.instant.plus(Duration.ofHours(1));
+        assertTrue(cache.get(first, String.class).isEmpty());
+        assertTrue(cache.get(third, String.class).isEmpty());
+    }
+
+    private static WeatherCacheKey key(String location) {
+        return new WeatherCacheKey(location, "now", "", "zh", "m", null);
+    }
+
+    @Test
     void marksExpiredValuesStaleAndClearsByLocation() {
         MutableClock clock = new MutableClock();
         WeatherCache cache = new WeatherCache(clock);

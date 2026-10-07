@@ -5,17 +5,23 @@ on:
   pull_request:
 
 jobs:
-  java17:
-    runs-on: ubuntu-latest
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        java: ['21', '25']
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: ${{ matrix.java }}
           cache: maven
-      - run: mvn --batch-mode --no-transfer-progress verify
+      - run: mvn --batch-mode --no-transfer-progress clean verify
       - uses: actions/upload-artifact@v4
         with:
-          name: understatus-nbm
-          path: target/understatus.nbm
+          name: understatus-nbm-${{ matrix.os }}-java${{ matrix.java }}
+          path: target/under_status.nbm
+          if-no-files-found: error

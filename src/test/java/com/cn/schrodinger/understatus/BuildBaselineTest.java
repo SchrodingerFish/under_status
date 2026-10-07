@@ -7,7 +7,7 @@ import org.junit.jupiter.api.Test;
 class BuildBaselineTest {
 
     @Test
-    void runsOnJava17OrNewer() {
-        assertTrue(Runtime.version().feature() >= 17);
+    void runsOnJava21OrNewer() {
+        assertTrue(Runtime.version().feature() >= 21);
     }
 }

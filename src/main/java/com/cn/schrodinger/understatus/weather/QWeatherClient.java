@@ -168,16 +168,17 @@ public final class QWeatherClient {
                     "/airquality/v1/current/%.2f/%.2f", location.latitude(), location.longitude());
             JsonValue.ObjectValue root = request(config, path, Map.of("lang", config.language()));
             return parseAirQuality(root);
-        } catch (Exception v1Ex) {
+        } catch (WeatherException v1Ex) {
+            if (Thread.currentThread().isInterrupted()
+                    || (v1Ex.kind() != WeatherException.Kind.UNSUPPORTED
+                    && v1Ex.kind() != WeatherException.Kind.NOT_FOUND
+                    && v1Ex.kind() != WeatherException.Kind.FORBIDDEN)) throw v1Ex;
             // Attempt 2: Fallback to /v7/air/now China city endpoint
             try {
                 JsonValue.ObjectValue root = request(config, "/v7/air/now",
                         Map.of("location", location.locationId(), "lang", config.language()));
                 return parseAirQuality(root);
             } catch (WeatherException fallbackEx) {
-                if (v1Ex instanceof WeatherException wEx && wEx.kind() == WeatherException.Kind.AUTHENTICATION) {
-                    throw wEx;
-                }
                 throw fallbackEx;
             }
         }
@@ -477,6 +478,9 @@ public final class QWeatherClient {
             throw ex;
         } catch (java.net.http.HttpTimeoutException ex) {
             throw new WeatherException(WeatherException.Kind.TIMEOUT, "天气请求超时", ex);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new WeatherException(WeatherException.Kind.CANCELLED, "天气请求已取消", ex);
         } catch (Exception ex) {
             throw new WeatherException(WeatherException.Kind.NETWORK, "天气服务暂时不可用", ex);
         }

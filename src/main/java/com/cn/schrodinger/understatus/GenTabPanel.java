@@ -17,7 +17,7 @@ import javax.swing.UIManager;
 
 /**
  * Versatile developer data & mock generator panel.
- * Supports standard UUID, 32-bit clean UUID, alphanumeric secure passwords,
+ * Supports standard UUID, 32-character clean UUID, 16-character SecureRandom passwords (letters, digits and symbols),
  * random verification codes, mock phone numbers, IPv4 addresses, and test emails.
  *
  * @author peter/antigravity
@@ -30,6 +30,7 @@ public class GenTabPanel extends JPanel {
 
     private JTextArea genResultArea;
     private JComboBox<String> batchCountCombo;
+    private JTextArea generationHint;
 
     public GenTabPanel() {
         initComponents();
@@ -40,15 +41,25 @@ public class GenTabPanel extends JPanel {
         setLayout(new BorderLayout(6, 6));
         setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
 
+        generationHint = new JTextArea(2, 0);
+        generationHint.setEditable(false);
+        generationHint.setFocusable(false);
+        generationHint.setOpaque(false);
+        generationHint.setLineWrap(true);
+        generationHint.setWrapStyleWord(true);
+        generationHint.setFont(UiDefaults.font(java.awt.Font.PLAIN, 12));
+        add(generationHint, BorderLayout.NORTH);
+
         // Center: Multi-line Result Area
         genResultArea = new JTextArea();
         genResultArea.setFont(UIManager.getFont("TextArea.font").deriveFont(11f));
         genResultArea.setLineWrap(true);
         genResultArea.setWrapStyleWord(true);
         genResultArea.setEditable(false);
+        genResultArea.getAccessibleContext().setAccessibleName(UiDefaults.text("Generator.results"));
 
         JScrollPane scrollPane = new JScrollPane(genResultArea);
-        scrollPane.setBorder(BorderFactory.createTitledBorder("生成结果 (Generated Results)"));
+        scrollPane.setBorder(BorderFactory.createTitledBorder(UiDefaults.text("Generator.results")));
         add(scrollPane, BorderLayout.CENTER);
 
         // South: Control Bar & Grid of Generators
@@ -63,10 +74,12 @@ public class GenTabPanel extends JPanel {
         JButton uuidCleanBtn = new JButton("32位 UUID (无横杠)");
         uuidCleanBtn.addActionListener(e -> generateData(2));
 
-        JButton pwdBtn = new JButton("随机强密码 (16位)");
+        JButton pwdBtn = new JButton(UiDefaults.text("Generator.password"));
+        UiDefaults.describe(pwdBtn, UiDefaults.text("Generator.password"), UiDefaults.text("Generator.passwordHint"));
         pwdBtn.addActionListener(e -> generateData(3));
 
-        JButton code6Btn = new JButton("6位数字验证码");
+        JButton code6Btn = new JButton(UiDefaults.text("Generator.mockCode"));
+        UiDefaults.describe(code6Btn, UiDefaults.text("Generator.mockCode"), UiDefaults.text("Generator.mockCodeHint"));
         code6Btn.addActionListener(e -> generateData(4));
 
         JButton phoneBtn = new JButton("Mock 手机号 (11位)");
@@ -96,17 +109,24 @@ public class GenTabPanel extends JPanel {
         JPanel bottomBar = new JPanel(new BorderLayout());
 
         JPanel batchPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
-        batchPanel.add(new JLabel("批量生成条数:"));
+        JLabel batchLabel = new JLabel(UiDefaults.text("Generator.count"));
+        batchPanel.add(batchLabel);
         batchCountCombo = new JComboBox<>(new String[]{"1 条", "5 条", "10 条", "20 条"});
+        batchLabel.setLabelFor(batchCountCombo);
+        batchCountCombo.getAccessibleContext().setAccessibleName(UiDefaults.text("Generator.count"));
         batchPanel.add(batchCountCombo);
         bottomBar.add(batchPanel, BorderLayout.WEST);
 
         JPanel rightActions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
-        JButton copyBtn = new JButton("复制结果");
+        JButton copyBtn = new JButton(UiDefaults.text("Action.copyResult"));
         copyBtn.addActionListener(e -> CommonUtils.copyToClipboard(genResultArea.getText()));
 
-        JButton clearBtn = new JButton("清空");
-        clearBtn.addActionListener(e -> genResultArea.setText(""));
+        JButton clearBtn = new JButton(UiDefaults.text("Action.clear"));
+        clearBtn.addActionListener(e -> {
+            genResultArea.setText("");
+            genResultArea.getAccessibleContext().setAccessibleDescription("");
+            generationHint.setText("");
+        });
 
         rightActions.add(copyBtn);
         rightActions.add(clearBtn);
@@ -133,6 +153,10 @@ public class GenTabPanel extends JPanel {
                 case 8 -> sb.append(System.currentTimeMillis());
             }
         }
+        String hint = type == 3 ? UiDefaults.text("Generator.passwordHint")
+                : type == 4 ? UiDefaults.text("Generator.mockCodeHint") : "";
+        generationHint.setText(hint.isBlank() ? " " : hint);
+        genResultArea.getAccessibleContext().setAccessibleDescription(hint);
         genResultArea.setText(sb.toString());
     }
 

@@ -1,14 +1,17 @@
 package com.cn.schrodinger.understatus;
 
+import com.cn.schrodinger.understatus.toolbox.notes.NotesSession;
+import com.cn.schrodinger.understatus.toolbox.notes.NotesSession.Entry;
 import java.awt.BorderLayout;
 import java.awt.Dimension;
 import java.awt.GridLayout;
 import java.awt.Insets;
-import java.util.ArrayList;
+import java.awt.event.HierarchyEvent;
 import java.util.List;
 import javax.swing.BorderFactory;
 import javax.swing.DefaultListModel;
 import javax.swing.JButton;
+import javax.swing.JLabel;
 import javax.swing.JList;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
@@ -16,215 +19,197 @@ import javax.swing.JScrollPane;
 import javax.swing.JSplitPane;
 import javax.swing.JTextArea;
 import javax.swing.ListSelectionModel;
+import javax.swing.SwingUtilities;
 import javax.swing.UIManager;
-import javax.swing.event.DocumentEvent;
-import javax.swing.event.DocumentListener;
-import com.cn.schrodinger.understatus.settings.SettingsRepository;
-import com.cn.schrodinger.understatus.toolbox.notes.Note;
-import com.cn.schrodinger.understatus.toolbox.notes.NoteCodec;
+import javax.swing.text.PlainDocument;
 
-/**
- * Redeveloped notebook tab panel.
- * Supports N independent notes with sidebar JList manager.
- * Supports add (+), delete (-), and rename options, with backward data compatibility.
- *
- * @author peter/antigravity
- */
+/** Notebook view over the shared, asynchronously persisted notes session. */
 public class NotesTabPanel extends JPanel {
 
-    private final List<NoteEntry> notesList = new ArrayList<>();
-    private final NoteCodec noteCodec = new NoteCodec();
-    private DefaultListModel<String> listModel;
-    private JList<String> noteJList;
-    private JTextArea noteTextArea;
-    private boolean isUpdatingSelection = false;
-    private final javax.swing.Timer saveDebounceTimer = new javax.swing.Timer(500, e -> flushSaveToPreferences());
+    private final NotesSession session;
+    private final DefaultListModel<Entry> listModel = new DefaultListModel<>();
+    private final JList<Entry> noteJList = new JList<>(listModel);
+    private final JTextArea noteTextArea = new JTextArea();
+    private final JLabel status = new JLabel();
+    private final JButton retryButton = new JButton("重试 (Retry)");
+    private final JButton addButton = new JButton("+");
+    private final JButton deleteButton = new JButton("-");
+    private final JButton renameButton = new JButton("✎");
+    private final PlainDocument emptyDocument = new PlainDocument();
+    private boolean updatingSelection;
+    private Runnable unsubscribe;
 
     public NotesTabPanel() {
-        saveDebounceTimer.setRepeats(false);
+        this(NotesSession.getDefault());
+    }
+
+    public NotesTabPanel(NotesSession session) {
+        this.session = session;
         initComponents();
-        loadNotesFromPreferences();
-        if (!notesList.isEmpty()) {
-            noteJList.setSelectedIndex(0);
-        }
+        attach();
+        session.ensureLoaded();
     }
 
     private void initComponents() {
         setLayout(new BorderLayout());
         setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
-
         addHierarchyListener(e -> {
-            if ((e.getChangeFlags() & java.awt.event.HierarchyEvent.SHOWING_CHANGED) != 0 && !isShowing()) {
+            if ((e.getChangeFlags() & HierarchyEvent.SHOWING_CHANGED) != 0 && !isShowing()) {
                 flushSaveToPreferences();
             }
         });
 
-        // Left Panel (JList & CRUD Buttons)
         JPanel leftPanel = new JPanel(new BorderLayout(5, 5));
         leftPanel.setPreferredSize(new Dimension(130, 0));
-
-        listModel = new DefaultListModel<>();
-        noteJList = new JList<>(listModel);
+        noteJList.setName("notes-list");
+        noteJList.getAccessibleContext().setAccessibleName("便签列表 (Notes list)");
         noteJList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         noteJList.addListSelectionListener(e -> {
-            if (e.getValueIsAdjusting()) return;
-            flushSaveToPreferences();
-            int idx = noteJList.getSelectedIndex();
-            if (idx >= 0) {
-                isUpdatingSelection = true;
-                noteTextArea.setText(notesList.get(idx).content);
-                noteTextArea.setEnabled(true);
-                isUpdatingSelection = false;
-            } else {
-                noteTextArea.setText("");
-                noteTextArea.setEnabled(false);
+            if (!e.getValueIsAdjusting() && !updatingSelection) {
+                session.flush();
+                showSelectedNote();
             }
         });
-        
         leftPanel.add(new JScrollPane(noteJList), BorderLayout.CENTER);
 
-        // CRUD Button panel
         JPanel buttonPanel = new JPanel(new GridLayout(1, 3, 2, 2));
-        JButton addBtn = new JButton("+");
-        addBtn.setMargin(new Insets(2, 2, 2, 2));
-        addBtn.setToolTipText("添加新便签 (Add note)");
-        addBtn.addActionListener(e -> addNote());
-
-        JButton delBtn = new JButton("-");
-        delBtn.setMargin(new Insets(2, 2, 2, 2));
-        delBtn.setToolTipText("删除选中便签 (Delete note)");
-        delBtn.addActionListener(e -> deleteNote());
-
-        JButton renameBtn = new JButton("✎");
-        renameBtn.setMargin(new Insets(2, 2, 2, 2));
-        renameBtn.setToolTipText("重命名便签 (Rename note)");
-        renameBtn.addActionListener(e -> renameNote());
-
-        buttonPanel.add(addBtn);
-        buttonPanel.add(delBtn);
-        buttonPanel.add(renameBtn);
+        configureButton(addButton, "添加新便签 (Add note)");
+        addButton.addActionListener(e -> addNote());
+        configureButton(deleteButton, "删除选中便签 (Delete note)");
+        deleteButton.addActionListener(e -> deleteNote());
+        configureButton(renameButton, "重命名便签 (Rename note)");
+        renameButton.addActionListener(e -> renameNote());
+        buttonPanel.add(addButton);
+        buttonPanel.add(deleteButton);
+        buttonPanel.add(renameButton);
         leftPanel.add(buttonPanel, BorderLayout.SOUTH);
 
-        // Right Panel (Active JTextArea)
-        noteTextArea = new JTextArea();
+        noteTextArea.setName("notes-editor");
+        noteTextArea.getAccessibleContext().setAccessibleName("便签内容 (Note content)");
         noteTextArea.setLineWrap(true);
         noteTextArea.setWrapStyleWord(true);
-        noteTextArea.setFont(UIManager.getFont("TextArea.font").deriveFont(12f));
-        noteTextArea.getDocument().addDocumentListener(new DocumentListener() {
-            @Override
-            public void insertUpdate(DocumentEvent e) { saveCurrentNoteText(); }
-            @Override
-            public void removeUpdate(DocumentEvent e) { saveCurrentNoteText(); }
-            @Override
-            public void changedUpdate(DocumentEvent e) { saveCurrentNoteText(); }
-        });
-        JScrollPane textScrollPane = new JScrollPane(noteTextArea);
-
-        // Split Pane container
-        JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, leftPanel, textScrollPane);
+        if (UIManager.getFont("TextArea.font") != null) {
+            noteTextArea.setFont(UIManager.getFont("TextArea.font").deriveFont(12f));
+        }
+        JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT,
+                leftPanel, new JScrollPane(noteTextArea));
         splitPane.setDividerLocation(130);
         add(splitPane, BorderLayout.CENTER);
+
+        JPanel footer = new JPanel(new BorderLayout(5, 0));
+        status.setName("notes-status");
+        status.getAccessibleContext().setAccessibleName("便签保存状态 (Note save status)");
+        retryButton.setName("notes-retry");
+        retryButton.getAccessibleContext().setAccessibleName("重试加载或保存便签 (Retry notes)");
+        retryButton.addActionListener(e -> session.retry());
+        footer.add(status, BorderLayout.CENTER);
+        footer.add(retryButton, BorderLayout.EAST);
+        add(footer, BorderLayout.SOUTH);
     }
 
-    private void saveCurrentNoteText() {
-        if (isUpdatingSelection) return;
-        int idx = noteJList.getSelectedIndex();
-        if (idx >= 0) {
-            notesList.get(idx).content = noteTextArea.getText();
-            saveDebounceTimer.restart();
+    private static void configureButton(JButton button, String name) {
+        button.setMargin(new Insets(2, 2, 2, 2));
+        button.setToolTipText(name);
+        button.getAccessibleContext().setAccessibleName(name);
+    }
+
+    private void attach() {
+        if (unsubscribe == null) unsubscribe = session.subscribe(this::refresh);
+        refresh();
+    }
+
+    @Override public void addNotify() {
+        super.addNotify();
+        attach();
+    }
+
+    @Override public void removeNotify() {
+        // Capture while documents are attached; completion never waits on IO.
+        flushSaveToPreferences();
+        if (unsubscribe != null) {
+            unsubscribe.run();
+            unsubscribe = null;
         }
+        // JTextArea's UI listeners otherwise keep a disposed panel reachable
+        // through the process-wide document, even after its session unsubscribe.
+        noteTextArea.setDocument(emptyDocument);
+        super.removeNotify();
     }
 
+    private void refresh() {
+        List<Entry> entries = session.entries();
+        boolean changed = entries.size() != listModel.size();
+        for (int i = 0; !changed && i < entries.size(); i++) {
+            changed = entries.get(i) != listModel.get(i);
+        }
+        if (changed) {
+            Entry selected = noteJList.getSelectedValue();
+            int previousIndex = noteJList.getSelectedIndex();
+            updatingSelection = true;
+            try {
+                listModel.clear();
+                for (Entry entry : entries) listModel.addElement(entry);
+                int selectedIndex = selected == null ? -1 : entries.indexOf(selected);
+                if (selectedIndex < 0 && !entries.isEmpty()) {
+                    selectedIndex = Math.max(0, Math.min(previousIndex - 1, entries.size() - 1));
+                }
+                noteJList.setSelectedIndex(selectedIndex);
+            } finally {
+                updatingSelection = false;
+            }
+        }
+        noteJList.repaint();
+        showSelectedNote();
+        noteJList.setEnabled(session.isLoaded());
+        addButton.setEnabled(session.isLoaded());
+        deleteButton.setEnabled(noteJList.getSelectedValue() != null);
+        renameButton.setEnabled(noteJList.getSelectedValue() != null);
+        status.setText(session.statusText());
+        status.setToolTipText(session.detail().isEmpty() ? null : session.detail());
+        status.getAccessibleContext().setAccessibleDescription(session.detail());
+        retryButton.setVisible(session.canRetry());
+    }
+
+    private void showSelectedNote() {
+        Entry selected = noteJList.getSelectedValue();
+        var document = selected == null ? emptyDocument : selected.document();
+        if (noteTextArea.getDocument() != document) noteTextArea.setDocument(document);
+        noteTextArea.setEnabled(session.isLoaded() && selected != null);
+    }
+
+    /** Retained for callers; captures on the EDT and queues background storage. */
     public void flushSaveToPreferences() {
-        if (saveDebounceTimer.isRunning()) {
-            saveDebounceTimer.stop();
-        }
-        saveNotesToPreferences();
+        if (SwingUtilities.isEventDispatchThread()) session.flush();
+        else SwingUtilities.invokeLater(session::flush);
     }
 
     private void addNote() {
-        String title = JOptionPane.showInputDialog(this, "请输入新建便签名称:", "新建便签 (Add Note)", JOptionPane.PLAIN_MESSAGE);
+        String title = JOptionPane.showInputDialog(this, "请输入新建便签名称:",
+                "新建便签 (Add Note)", JOptionPane.PLAIN_MESSAGE);
         if (title == null) return;
         title = title.trim();
-        if (title.isEmpty()) {
-            title = "新建便签 " + (notesList.size() + 1);
-        }
-        NoteEntry newEntry = new NoteEntry(title, "");
-        notesList.add(newEntry);
-        listModel.addElement(title);
-        saveNotesToPreferences();
-        noteJList.setSelectedIndex(notesList.size() - 1);
+        if (title.isEmpty()) title = "新建便签 " + (session.entries().size() + 1);
+        Entry created = session.add(title);
+        noteJList.setSelectedValue(created, true);
+        session.flush();
     }
 
     private void deleteNote() {
-        int idx = noteJList.getSelectedIndex();
-        if (idx < 0) return;
-
-        int confirm = JOptionPane.showConfirmDialog(this, "确定删除便签 [" + notesList.get(idx).title + "] 吗？", "确认删除", JOptionPane.YES_NO_OPTION);
+        Entry selected = noteJList.getSelectedValue();
+        if (selected == null) return;
+        int confirm = JOptionPane.showConfirmDialog(this, "确定删除便签 [" + selected.title() + "] 吗？",
+                "确认删除", JOptionPane.YES_NO_OPTION);
         if (confirm != JOptionPane.YES_OPTION) return;
-
-        notesList.remove(idx);
-        listModel.remove(idx);
-        saveNotesToPreferences();
-
-        if (!notesList.isEmpty()) {
-            noteJList.setSelectedIndex(Math.max(0, idx - 1));
-        } else {
-            // Always keep at least 1 note
-            NoteEntry def = new NoteEntry("便签 1", "");
-            notesList.add(def);
-            listModel.addElement(def.title);
-            saveNotesToPreferences();
-            noteJList.setSelectedIndex(0);
-        }
+        session.delete(selected);
+        session.flush();
     }
 
     private void renameNote() {
-        int idx = noteJList.getSelectedIndex();
-        if (idx < 0) return;
-
-        String oldTitle = notesList.get(idx).title;
-        String newTitle = JOptionPane.showInputDialog(this, "请输入便签新名称:", oldTitle);
-        if (newTitle == null) return;
-        newTitle = newTitle.trim();
-        if (newTitle.isEmpty()) return;
-
-        notesList.get(idx).title = newTitle;
-        listModel.set(idx, newTitle);
-        saveNotesToPreferences();
-        noteJList.setSelectedIndex(idx);
-    }
-
-    private void saveNotesToPreferences() {
-        List<Note> notes = notesList.stream().map(entry -> new Note(entry.title, entry.content)).toList();
-        SettingsRepository.getDefault().saveNotes(noteCodec.encode(notes));
-    }
-
-    private void loadNotesFromPreferences() {
-        String data = SettingsRepository.getDefault().loadNotes();
-        notesList.clear();
-        listModel.clear();
-
-        for (Note note : noteCodec.decode(data)) {
-            NoteEntry entry = new NoteEntry(note.title(), note.content());
-            notesList.add(entry);
-            listModel.addElement(entry.title);
-        }
-
-        if (notesList.isEmpty()) {
-            NoteEntry def = new NoteEntry("便签 1", "");
-            notesList.add(def);
-            listModel.addElement(def.title);
-        }
-    }
-
-    public static class NoteEntry {
-        public String title;
-        public String content;
-
-        public NoteEntry(String title, String content) {
-            this.title = title;
-            this.content = content;
-        }
+        Entry selected = noteJList.getSelectedValue();
+        if (selected == null) return;
+        String title = JOptionPane.showInputDialog(this, "请输入便签新名称:", selected.title());
+        if (title == null || title.isBlank()) return;
+        session.rename(selected, title);
+        session.flush();
     }
 }

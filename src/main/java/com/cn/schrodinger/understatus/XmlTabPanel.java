@@ -1,5 +1,6 @@
 package com.cn.schrodinger.understatus;
 
+import com.cn.schrodinger.understatus.toolbox.core.ToolTask;
 import com.cn.schrodinger.understatus.toolbox.core.XmlFormatter;
 
 import java.awt.BorderLayout;
@@ -18,7 +19,10 @@ import javax.swing.UIManager;
  */
 public class XmlTabPanel extends JPanel {
 
+    private final ToolTask tasks = new ToolTask(this);
     private JTextArea xmlTextArea;
+
+    private final javax.swing.JLabel statusLabel = new javax.swing.JLabel(" ");
 
     public XmlTabPanel() {
         initComponents();
@@ -29,12 +33,15 @@ public class XmlTabPanel extends JPanel {
         setBorder(BorderFactory.createEmptyBorder(6, 6, 6, 6));
 
         xmlTextArea = new JTextArea();
+        tasks.watch(xmlTextArea);
         xmlTextArea.setFont(UIManager.getFont("TextArea.font").deriveFont(11f));
         add(new JScrollPane(xmlTextArea), BorderLayout.CENTER);
 
         JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
         JButton prettifyBtn = new JButton("美化 XML");
         JButton minifyBtn = new JButton("压缩 XML");
+        minifyBtn.setToolTipText("保留正文、CDATA 和 xml:space 中的空白，文档大小可能不变");
+        prettifyBtn.setToolTipText("保留所有文本空白；只对纯元素文档增加缩进");
         JButton clearBtn = new JButton("清空");
         JButton copyBtn = new JButton("复制");
 
@@ -48,17 +55,14 @@ public class XmlTabPanel extends JPanel {
         buttonPanel.add(clearBtn);
         buttonPanel.add(copyBtn);
 
-        add(buttonPanel, BorderLayout.SOUTH);
+        JPanel footer = new JPanel(new BorderLayout());
+        footer.add(buttonPanel, BorderLayout.CENTER);
+        footer.add(statusLabel, BorderLayout.SOUTH);
+        add(footer, BorderLayout.SOUTH);
     }
 
     private void triggerXmlFormatting(boolean prettify) {
-        String input = xmlTextArea.getText().trim();
-        if (input.isEmpty()) return;
-        
-        if (prettify) {
-            xmlTextArea.setText(XmlFormatter.format(input));
-        } else {
-            xmlTextArea.setText(XmlFormatter.minify(input));
-        }
+        tasks.transform(xmlTextArea, xmlTextArea, statusLabel,
+                input -> prettify ? XmlFormatter.format(input) : XmlFormatter.minify(input));
     }
 }

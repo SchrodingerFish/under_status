@@ -33,10 +33,13 @@ public final class QWeatherService {
     public static String fetchWeather(String apiHost, String apiKey, String cityName,
             boolean autoIp) throws WeatherException {
         QWeatherConfig config = config(apiHost, apiKey);
-        LocationContext location = DATA.resolve(config, cityName, autoIp, false);
-        WeatherNow weather = DATA.now(config, location, false).value();
+        WeatherDataService.Result<LocationContext> resolved = DATA.resolveResult(config, cityName, autoIp, false);
+        LocationContext location = resolved.value();
+        WeatherDataService.Result<WeatherNow> result = DATA.now(config, location, false);
+        WeatherNow weather = result.value();
         return location.name() + " " + emoji(weather.condition()) + " " + weather.condition()
-                + " " + weather.temperatureCelsius() + "°C";
+                + " " + weather.temperatureCelsius() + "°C"
+                + (resolved.stale() || result.stale() ? " ⚠ 缓存已过期" : "");
     }
 
     public static List<HourlyForecast> fetchHourlyForecast(String apiHost,

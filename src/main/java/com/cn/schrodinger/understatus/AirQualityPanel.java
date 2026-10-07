@@ -47,6 +47,12 @@ public class AirQualityPanel extends JPanel {
             return;
         }
 
+        StringBuilder description = new StringBuilder(UiDefaults.text("Weather.air.summary",
+                snapshot.updateTime(), snapshot.aqi(), snapshot.category(), snapshot.primaryPollutant()));
+        snapshot.pollutants().entrySet().stream().sorted(Map.Entry.comparingByKey()).forEach(entry ->
+                description.append("\n").append(entry.getKey()).append(": ").append(entry.getValue())
+                        .append("co".equalsIgnoreCase(entry.getKey()) ? " mg/m³" : " μg/m³"));
+        UiDefaults.textAlternative(this, UiDefaults.text("Weather.air.name"), description.toString());
         contentPanel.removeAll();
         boolean isDark = isDarkTheme();
 
@@ -63,11 +69,12 @@ public class AirQualityPanel extends JPanel {
     }
 
     private void renderEmpty() {
+        UiDefaults.textAlternative(this, UiDefaults.text("Weather.air.name"), UiDefaults.text("Weather.air.empty"));
         contentPanel.removeAll();
-        JLabel label = new JLabel("暂无空气质量数据");
+        JLabel label = new JLabel(UiDefaults.text("Weather.air.empty"));
         label.setHorizontalAlignment(JLabel.CENTER);
-        label.setFont(new Font("SansSerif", Font.PLAIN, 13));
-        label.setForeground(Color.GRAY);
+        label.setFont(UiDefaults.font(Font.PLAIN, 13));
+        label.setForeground(UiDefaults.foreground());
         contentPanel.add(label, BorderLayout.CENTER);
         contentPanel.revalidate();
         contentPanel.repaint();
@@ -75,8 +82,8 @@ public class AirQualityPanel extends JPanel {
 
     private JPanel createSummaryCard(AirQualitySnapshot a, boolean isDark) {
         JPanel card = new JPanel(new BorderLayout(16, 8));
-        Color bg = isDark ? new Color(34, 40, 54) : new Color(255, 255, 255);
-        Color border = isDark ? new Color(60, 72, 94) : new Color(225, 232, 242);
+        Color bg = UiDefaults.background();
+        Color border = UiDefaults.border();
         card.setBackground(bg);
         card.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(border, 1, true),
@@ -88,7 +95,7 @@ public class AirQualityPanel extends JPanel {
         leftPanel.setOpaque(false);
 
         JLabel aqiNumber = new JLabel(String.valueOf(a.aqi()));
-        aqiNumber.setFont(new Font("SansSerif", Font.BOLD, 36));
+        aqiNumber.setFont(UiDefaults.font(Font.BOLD, 36));
         Color aqiColor = getAqiColor(a.aqi());
         aqiNumber.setForeground(aqiColor);
         leftPanel.add(aqiNumber);
@@ -97,18 +104,18 @@ public class AirQualityPanel extends JPanel {
         infoStack.setOpaque(false);
 
         JLabel catBadge = new JLabel(" " + (a.category().isEmpty() ? "空气指数" : a.category()) + " ");
-        catBadge.setFont(new Font("SansSerif", Font.BOLD, 12));
+        catBadge.setFont(UiDefaults.font(Font.BOLD, 12));
         catBadge.setOpaque(true);
         catBadge.setBackground(aqiColor);
-        catBadge.setForeground(Color.WHITE);
+        catBadge.setForeground(UiDefaults.onColor(aqiColor));
         catBadge.setBorder(BorderFactory.createEmptyBorder(2, 6, 2, 6));
         infoStack.add(catBadge);
 
         String primText = (a.primaryPollutant().isEmpty() || "none".equalsIgnoreCase(a.primaryPollutant()))
                 ? "首要污染物: 无" : ("首要污染物: " + a.primaryPollutant());
         JLabel primLabel = new JLabel(primText);
-        primLabel.setFont(new Font("SansSerif", Font.PLAIN, 11));
-        primLabel.setForeground(isDark ? new Color(175, 190, 210) : new Color(100, 115, 135));
+        primLabel.setFont(UiDefaults.font(Font.PLAIN, 11));
+        primLabel.setForeground(UiDefaults.foreground());
         infoStack.add(primLabel);
 
         leftPanel.add(infoStack);
@@ -117,8 +124,8 @@ public class AirQualityPanel extends JPanel {
         // Right: attribution tag or status
         if (!a.attributionTag().isEmpty()) {
             JLabel attrLabel = new JLabel("许可: " + a.attributionTag());
-            attrLabel.setFont(new Font("SansSerif", Font.PLAIN, 11));
-            attrLabel.setForeground(isDark ? new Color(140, 155, 175) : new Color(130, 145, 165));
+            attrLabel.setFont(UiDefaults.font(Font.PLAIN, 11));
+            attrLabel.setForeground(UiDefaults.foreground());
             card.add(attrLabel, BorderLayout.EAST);
         }
 
@@ -143,8 +150,8 @@ public class AirQualityPanel extends JPanel {
 
     private JPanel createPollutantTile(String title, Double val, String unit, boolean isDark) {
         JPanel tile = new JPanel(new BorderLayout(6, 4));
-        Color bg = isDark ? new Color(34, 40, 54) : new Color(255, 255, 255);
-        Color border = isDark ? new Color(60, 72, 94) : new Color(225, 232, 242);
+        Color bg = UiDefaults.background();
+        Color border = UiDefaults.border();
         tile.setBackground(bg);
         tile.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(border, 1, true),
@@ -152,14 +159,14 @@ public class AirQualityPanel extends JPanel {
         ));
 
         JLabel titleLabel = new JLabel(title);
-        titleLabel.setFont(new Font("SansSerif", Font.PLAIN, 11));
-        titleLabel.setForeground(isDark ? new Color(160, 175, 195) : new Color(95, 110, 130));
+        titleLabel.setFont(UiDefaults.font(Font.PLAIN, 11));
+        titleLabel.setForeground(UiDefaults.foreground());
         tile.add(titleLabel, BorderLayout.NORTH);
 
         String valStr = (val != null) ? String.format(Locale.US, "%.1f %s", val, unit) : "-- " + unit;
         JLabel valLabel = new JLabel(valStr);
-        valLabel.setFont(new Font("SansSerif", Font.BOLD, 15));
-        valLabel.setForeground(isDark ? new Color(230, 238, 250) : new Color(30, 45, 65));
+        valLabel.setFont(UiDefaults.font(Font.BOLD, 15));
+        valLabel.setForeground(UiDefaults.foreground());
         tile.add(valLabel, BorderLayout.CENTER);
 
         return tile;

@@ -3,6 +3,7 @@ package com.cn.schrodinger.understatus.weather;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayOutputStream;
 import java.net.URI;
@@ -13,6 +14,28 @@ import java.util.zip.GZIPOutputStream;
 import org.junit.jupiter.api.Test;
 
 class JdkHttpTransportTest {
+
+    @Test
+    void cancelsBodySubscriptionBeforeAccumulatingOversizedResponse() {
+        JdkHttpTransport.LimitedBodySubscriber subscriber = new JdkHttpTransport.LimitedBodySubscriber();
+        java.util.concurrent.atomic.AtomicBoolean cancelled = new java.util.concurrent.atomic.AtomicBoolean();
+        subscriber.onSubscribe(new java.util.concurrent.Flow.Subscription() {
+            @Override public void request(long count) {}
+            @Override public void cancel() { cancelled.set(true); }
+        });
+        subscriber.onNext(java.util.List.of(java.nio.ByteBuffer.allocate(JdkHttpTransport.MAX_BODY_BYTES)));
+        subscriber.onNext(java.util.List.of(java.nio.ByteBuffer.allocate(1)));
+        assertTrue(cancelled.get());
+        assertTrue(subscriber.getBody().toCompletableFuture().isCompletedExceptionally());
+    }
+
+    @Test
+    void rejectsOversizedPlainAndDecompressedBodies() throws Exception {
+        byte[] large = new byte[3 * 1024 * 1024];
+        byte[] compressed = gzip(large);
+        assertThrows(java.io.IOException.class, () -> JdkHttpTransport.decodeBody(large, ""));
+        assertThrows(java.io.IOException.class, () -> JdkHttpTransport.decodeBody(compressed, "gzip"));
+    }
 
     @Test
     void decodesGzipAndPlainUtf8Bodies() throws Exception {

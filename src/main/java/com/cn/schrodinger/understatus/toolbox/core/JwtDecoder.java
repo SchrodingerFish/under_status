@@ -1,152 +1,104 @@
 package com.cn.schrodinger.understatus.toolbox.core;
 
+import com.cn.schrodinger.understatus.core.JsonSupport;
+import com.fasterxml.jackson.databind.JsonNode;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
 import java.time.Instant;
-import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
 import java.util.Base64;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
-/**
- * Standard compliance JSON Web Token (JWT) decoder and diagnostics analyzer.
- * Splits header/payload, formats claims, and calculates expiration status.
- *
- * @author peter/antigravity
- */
-public class JwtDecoder {
+/** Inspects compact JWT claims. This utility does not verify signatures or trust. */
+public final class JwtDecoder {
+    private static final BigDecimal MIN_DATE = BigDecimal.valueOf(Instant.MIN.getEpochSecond());
+    private static final BigDecimal MAX_DATE = BigDecimal.valueOf(Instant.MAX.getEpochSecond())
+            .add(new BigDecimal("0.999999999"));
+    private JwtDecoder() {}
 
-    private static final DateTimeFormatter TIME_FMT = 
-            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").withZone(ZoneId.systemDefault());
+    public static String decodeJwt(String token) { return decodeJwt(token, Clock.systemUTC()); }
 
-    private static final Pattern PATTERN_ALG = Pattern.compile("\"alg\"\\s*:\\s*\"([^\"]*)\"");
-    private static final Pattern PATTERN_TYP = Pattern.compile("\"typ\"\\s*:\\s*\"([^\"]*)\"");
-    private static final Pattern PATTERN_SUB = Pattern.compile("\"sub\"\\s*:\\s*\"([^\"]*)\"");
-    private static final Pattern PATTERN_ISS = Pattern.compile("\"iss\"\\s*:\\s*\"([^\"]*)\"");
-    private static final Pattern PATTERN_AUD = Pattern.compile("\"aud\"\\s*:\\s*\"([^\"]*)\"");
-
-    private static final Pattern PATTERN_EXP = Pattern.compile("\"exp\"\\s*:\\s*(\\d+)");
-    private static final Pattern PATTERN_IAT = Pattern.compile("\"iat\"\\s*:\\s*(\\d+)");
-    private static final Pattern PATTERN_NBF = Pattern.compile("\"nbf\"\\s*:\\s*(\\d+)");
-
-    public static String decodeJwt(String token) {
-        if (token == null || token.trim().isEmpty()) {
-            return "";
-        }
-        token = token.trim();
-        String[] parts = token.split("\\.");
-        if (parts.length < 2) {
-            return "无效的 JWT 格式 (Must contain at least Header and Payload parts separated by dots)";
-        }
+    public static String decodeJwt(String token, Clock clock) {
+        if (token == null || token.isBlank()) return "";
         try {
-            String header = new String(Base64.getUrlDecoder().decode(parts[0]), StandardCharsets.UTF_8);
-            String payload = new String(Base64.getUrlDecoder().decode(parts[1]), StandardCharsets.UTF_8);
-
-            StringBuilder sb = new StringBuilder();
-            sb.append("════════════════════ 🎫 JWT 诊断分析 (Diagnostics) ════════════════════\n");
-
-            // Extract claims
-            String alg = extractStringClaim(header, PATTERN_ALG);
-            String typ = extractStringClaim(header, PATTERN_TYP);
-            Long exp = extractLongClaim(payload, PATTERN_EXP);
-            Long iat = extractLongClaim(payload, PATTERN_IAT);
-            Long nbf = extractLongClaim(payload, PATTERN_NBF);
-            String sub = extractStringClaim(payload, PATTERN_SUB);
-            String iss = extractStringClaim(payload, PATTERN_ISS);
-            String aud = extractStringClaim(payload, PATTERN_AUD);
-
-            long now = Instant.now().getEpochSecond();
-
-            // Status calculation
-            if (exp != null) {
-                long diff = exp - now;
-                if (diff > 0) {
-                    sb.append("【令牌状态】: 🟢 有效中 (剩余 ").append(formatDuration(diff)).append(")\n");
-                } else {
-                    sb.append("【令牌状态】: 🔴 已过期 (已过期 ").append(formatDuration(-diff)).append(")\n");
-                }
-            } else {
-                sb.append("【令牌状态】: ⚪ 永久有效 (未包含 exp 过期时间)\n");
+            ToolLimits.input(token);
+            String[] parts = token.trim().split("\\.", -1);
+            if (parts.length != 3 || parts[0].isEmpty() || parts[1].isEmpty()) {
+                return "无效的 JWT 格式: Expected three compact JWT segments";
             }
-
-            if (nbf != null && nbf > now) {
-                sb.append("【生效预警】: 🟡 尚未生效 (将于 ").append(formatDuration(nbf - now)).append(" 后生效)\n");
+            JsonNode header = decodeObject(parts[0]);
+            JsonNode payload = decodeObject(parts[1]);
+            if (!parts[2].isEmpty()) decodeBase64(parts[2]);
+            Instant exp = numericDate(payload, "exp");
+            Instant nbf = numericDate(payload, "nbf");
+            Instant iat = numericDate(payload, "iat");
+            Instant now = clock.instant();
+            StringBuilder out = new StringBuilder("JWT 诊断: 未验证签名 (Signature unverified)，不能据此判断令牌可信或有效。\n");
+            out.append(parts[2].isEmpty() ? "签名: 无签名 (Unsigned)\n" : "签名: 已附带，未验证\n");
+            if (exp == null) out.append("过期状态: 未包含 exp，过期时间未知。\n");
+            else if (!now.isBefore(exp)) out.append("过期状态: 已过期。\n");
+            else out.append("过期状态: 尚未到 exp 时间。\n");
+            if (nbf != null && now.isBefore(nbf)) out.append("生效状态: 尚未生效 (nbf 位于未来)。\n");
+            appendText(out, header, "alg");
+            appendText(out, header, "typ");
+            appendText(out, payload, "sub");
+            appendText(out, payload, "iss");
+            JsonNode audience = payload.get("aud");
+            if (audience != null) {
+                if (audience.isArray()) {
+                    for (JsonNode value : audience) if (!value.isTextual()) throw new IllegalArgumentException("aud must contain strings");
+                } else if (!audience.isTextual()) throw new IllegalArgumentException("aud must be a string or string array");
+                out.append("aud: ").append(audience).append('\n');
             }
-
-            if (alg != null || typ != null) {
-                sb.append("【算法类型】: ")
-                  .append(alg != null ? "算法 " + alg : "")
-                  .append(typ != null ? " | 类型 " + typ : "")
-                  .append("\n");
-            }
-
-            if (iat != null) {
-                sb.append("【签发时间 (iat)】: ").append(TIME_FMT.format(Instant.ofEpochSecond(iat)))
-                  .append(" (").append(iat).append(")\n");
-            }
-            if (nbf != null) {
-                sb.append("【生效时间 (nbf)】: ").append(TIME_FMT.format(Instant.ofEpochSecond(nbf)))
-                  .append(" (").append(nbf).append(")\n");
-            }
-            if (exp != null) {
-                sb.append("【过期时间 (exp)】: ").append(TIME_FMT.format(Instant.ofEpochSecond(exp)))
-                  .append(" (").append(exp).append(")\n");
-            }
-
-            if (sub != null) sb.append("【主体身份 (sub)】: ").append(sub).append("\n");
-            if (iss != null) sb.append("【签发机构 (iss)】: ").append(iss).append("\n");
-            if (aud != null) sb.append("【受众群体 (aud)】: ").append(aud).append("\n");
-
-            if (parts.length >= 3 && !parts[2].isEmpty()) {
-                sb.append("【数字签名 (sig)】: 已附带签名 (长度 ").append(parts[2].length()).append(" 字符)\n");
-            } else {
-                sb.append("【数字签名 (sig)】: ⚠️ 无签名 (Unsigned)\n");
-            }
-
-            sb.append("═══════════════════════════════════════════════════════════════════════\n\n");
-            sb.append("【HEADER · 标头】\n").append(JsonFormatter.format(header)).append("\n\n");
-            sb.append("【PAYLOAD · 载荷】\n").append(JsonFormatter.format(payload));
-
-            return sb.toString();
+            if (iat != null) out.append("iat: ").append(iat).append('\n');
+            if (nbf != null) out.append("nbf: ").append(nbf).append('\n');
+            if (exp != null) out.append("exp: ").append(exp).append('\n');
+            out.append("\nHEADER\n").append(JsonSupport.write(header, true));
+            out.append("\n\nPAYLOAD\n").append(JsonSupport.write(payload, true));
+            return ToolLimits.output(out.toString());
         } catch (Exception ex) {
             return "JWT 解码失败 (Decoding failed): " + ex.getMessage();
         }
     }
 
-    private static String formatDuration(long seconds) {
-        if (seconds < 0) seconds = -seconds;
-        long days = seconds / 86400;
-        long hours = (seconds % 86400) / 3600;
-        long minutes = (seconds % 3600) / 60;
-        long secs = seconds % 60;
-
-        if (days > 0) {
-            return days + " 天 " + hours + " 小时 " + minutes + " 分";
-        } else if (hours > 0) {
-            return hours + " 小时 " + minutes + " 分 " + secs + " 秒";
-        } else if (minutes > 0) {
-            return minutes + " 分 " + secs + " 秒";
-        } else {
-            return secs + " 秒";
-        }
+    private static byte[] decodeBase64(String segment) {
+        if (!segment.matches("[A-Za-z0-9_-]+")) throw new IllegalArgumentException("Expected unpadded Base64URL segment");
+        return Base64.getUrlDecoder().decode(segment);
     }
 
-    private static Long extractLongClaim(String json, Pattern pattern) {
-        Matcher m = pattern.matcher(json);
-        if (m.find()) {
-            try {
-                return Long.parseLong(m.group(1));
-            } catch (Exception ignored) {}
-        }
-        return null;
+    private static JsonNode decodeObject(String segment) throws java.nio.charset.CharacterCodingException {
+        String json = StandardCharsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(decodeBase64(segment))).toString();
+        JsonNode value = JsonSupport.parse(json);
+        if (!value.isObject()) throw new IllegalArgumentException("JWT header/payload must be JSON objects");
+        return value;
     }
 
-    private static String extractStringClaim(String json, Pattern pattern) {
-        Matcher m = pattern.matcher(json);
-        if (m.find()) {
-            return m.group(1);
+    private static void appendText(StringBuilder out, JsonNode object, String name) {
+        JsonNode value = object.get(name);
+        if (value == null) return;
+        if (!value.isTextual()) throw new IllegalArgumentException(name + " must be a string");
+        out.append(name).append(": ").append(value.textValue()).append('\n');
+    }
+
+    private static Instant numericDate(JsonNode object, String name) {
+        JsonNode value = object.get(name);
+        if (value == null) return null;
+        if (!value.isNumber()) throw new IllegalArgumentException(name + " must be a numeric date");
+        try {
+            BigDecimal seconds = value.decimalValue().stripTrailingZeros();
+            // Inspect scale and magnitude before rounding can construct a power
+            // of ten. Supported Instants have at most 17 integer digits and 9
+            // fractional digits; trailing zeroes do not consume precision.
+            if (seconds.scale() > 9 || (long) seconds.precision() - seconds.scale() > 17
+                    || seconds.compareTo(MIN_DATE) < 0 || seconds.compareTo(MAX_DATE) > 0) {
+                throw new IllegalArgumentException("Numeric date exceeds Instant range or nanosecond precision");
+            }
+            long whole = seconds.setScale(0, RoundingMode.FLOOR).longValueExact();
+            int nanos = seconds.subtract(BigDecimal.valueOf(whole)).movePointRight(9).intValueExact();
+            return Instant.ofEpochSecond(whole, nanos);
+        } catch (RuntimeException ex) {
+            throw new IllegalArgumentException(name + " is outside the supported numeric date range/precision", ex);
         }
-        return null;
     }
 }
-

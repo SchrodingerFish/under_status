@@ -14,11 +14,6 @@ import org.openide.util.lookup.ServiceProvider;
 public class BottomToolbarProvider implements StatusLineElementProvider {
 
     private final BottomToolbarView panel = new BottomToolbarView();
-    private final StatusBarController controller = new StatusBarController(panel);
-
-    public BottomToolbarProvider() {
-        controller.start();
-    }
 
     @Override
     public Component getStatusLineElement() {

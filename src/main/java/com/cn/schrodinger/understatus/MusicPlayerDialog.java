@@ -3,8 +3,6 @@ package com.cn.schrodinger.understatus;
 import java.awt.BorderLayout;
 import java.awt.Dimension;
 import java.awt.Frame;
-import java.awt.event.WindowAdapter;
-import java.awt.event.WindowEvent;
 import javax.swing.JDialog;
 
 /**
@@ -30,6 +28,7 @@ public class MusicPlayerDialog extends JDialog {
 
     private MusicPlayerDialog(Frame parent) {
         super(parent, "🎵 独立音乐播放器 (Music Player)", false);
+        setDefaultCloseOperation(DISPOSE_ON_CLOSE);
         setLayout(new BorderLayout());
         setMinimumSize(new Dimension(800, 550));
         setPreferredSize(new Dimension(900, 600));
@@ -45,13 +44,6 @@ public class MusicPlayerDialog extends JDialog {
                 javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_ESCAPE, 0),
                 javax.swing.JComponent.WHEN_IN_FOCUSED_WINDOW
         );
-
-        addWindowListener(new WindowAdapter() {
-            @Override
-            public void windowClosing(WindowEvent e) {
-                // Window closing handling if needed
-            }
-        });
     }
 
     public MusicTabPanel getMusicPanel() {

@@ -1,4 +1,7 @@
 /target/
+/keystore
+/*.jks
+/*.p12
 /.worktrees/
 /.idea/
 /.fastRequest/
